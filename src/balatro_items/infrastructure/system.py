@@ -1,4 +1,4 @@
-"""The clock, ids and the randomness of the drops."""
+"""The clock, ids, and the randomness of the drops and of the casino's seeds."""
 
 from __future__ import annotations
 
@@ -25,3 +25,10 @@ class SystemRandom:
 
     def random(self) -> float:
         return self._rng.random()
+
+
+class SecretSeeds:
+    """The casino's server seeds: the operating system's randomness, so nobody can guess one."""
+
+    def seed(self) -> str:
+        return secrets.token_hex(32)

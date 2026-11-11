@@ -5,7 +5,8 @@ never plays it. Every item is numbered among the items of the same key and
 edition (``serial``: #1 was the first found), remembers where it came from
 (``source``, ``source_run``) and, when it came from a win, the stake it was
 won at (``stake``: the game's stake sticker). It can only change hands again
-when its trade hold is over (``tradable_at``).
+when its trade hold is over (``tradable_at``), and not while it is staked in a
+casino game (``staked``: casino.py).
 """
 
 from __future__ import annotations
@@ -78,9 +79,10 @@ class Item:
     created_at: datetime
     acquired_at: datetime  # when its owner got it
     tradable_at: datetime  # the end of its trade hold
+    staked: str | None = None  # the casino game it is staked in (it can't change hands until the game ends)
 
     def tradable(self, now: datetime) -> bool:
-        return now >= self.tradable_at
+        return self.staked is None and now >= self.tradable_at
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -92,6 +94,7 @@ class Transfer:
     to_owner: str
     at: datetime
     trade: str | None = None
+    game: str | None = None  # the casino game it was won in
 
 
 @dataclass(kw_only=True)

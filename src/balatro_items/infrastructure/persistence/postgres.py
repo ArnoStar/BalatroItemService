@@ -18,9 +18,24 @@ from typing import Any
 from psycopg import Connection, sql
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import DictRow, dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolTimeout
 
-from balatro_items.domain import Edition, Item, Kind, PlayerRecord, Rarity, Trade, TradeStatus, Transfer
+from balatro_items.domain import (
+    Edition,
+    Entry,
+    Game,
+    GameStatus,
+    Item,
+    Kind,
+    Mode,
+    PlayerRecord,
+    Rarity,
+    Side,
+    Trade,
+    TradeStatus,
+    Transfer,
+)
 
 MIGRATIONS: tuple[str, ...] = (
     # 1: players, items, their history, the grants claimed, trades
@@ -90,13 +105,38 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX trades_recipient ON trades (recipient, created_at DESC);
     CREATE INDEX trades_items ON trades USING GIN ((give || take));
     """,
+    # 2: the casino: its games, the items staked in them, the items won
+    """
+    ALTER TABLE items ADD COLUMN staked TEXT;
+    ALTER TABLE transfers ADD COLUMN game TEXT;
+    CREATE TABLE games (
+        id TEXT PRIMARY KEY,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL,
+        side TEXT,
+        entries JSONB NOT NULL,
+        players TEXT[] NOT NULL,
+        server_seed TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        closes_at TIMESTAMPTZ,
+        roll BIGINT,
+        winner TEXT
+    );
+    CREATE INDEX games_status ON games (status, mode, updated_at DESC);
+    CREATE INDEX games_players ON games USING GIN (players);
+    CREATE UNIQUE INDEX games_one_jackpot ON games (mode) WHERE mode = 'jackpot' AND status = 'open';
+    """,
 )
 
 ITEM_COLUMNS = ("id", "kind", "key", "edition", "rarity", "stake", "serial", "owner", "source", "source_run",
-                "created_at", "acquired_at", "tradable_at")
+                "created_at", "acquired_at", "tradable_at", "staked")
 SELECT_ITEMS = sql.SQL("SELECT {} FROM items").format(sql.SQL(", ").join(sql.Identifier(c) for c in ITEM_COLUMNS))
 SELECT_TRADES = ("SELECT id, sender, recipient, give, take, message, status, created_at, updated_at, expires_at "
                  "FROM trades")
+GAME_COLUMNS = ("id", "mode", "status", "side", "entries", "players", "server_seed", "created_at", "updated_at",
+                "closes_at", "roll", "winner")
+SELECT_GAMES = sql.SQL("SELECT {} FROM games").format(sql.SQL(", ").join(sql.Identifier(c) for c in GAME_COLUMNS))
 
 
 class DatabaseUnavailable(RuntimeError):
@@ -116,7 +156,7 @@ def _item(r: DictRow) -> Item:
     return Item(id=r["id"], kind=Kind(r["kind"]), key=r["key"], edition=Edition(r["edition"]),
                 rarity=Rarity(r["rarity"]), stake=r["stake"], serial=r["serial"], owner=r["owner"],
                 source=r["source"], source_run=r["source_run"], created_at=r["created_at"],
-                acquired_at=r["acquired_at"], tradable_at=r["tradable_at"])
+                acquired_at=r["acquired_at"], tradable_at=r["tradable_at"], staked=r["staked"])
 
 
 def _player(r: DictRow) -> PlayerRecord:
@@ -128,6 +168,23 @@ def _trade(r: DictRow) -> Trade:
     return Trade(id=r["id"], sender=r["sender"], recipient=r["recipient"], give=tuple(r["give"]),
                  take=tuple(r["take"]), message=r["message"], status=TradeStatus(r["status"]),
                  created_at=r["created_at"], updated_at=r["updated_at"], expires_at=r["expires_at"])
+
+
+def _game(r: DictRow) -> Game:
+    entries = [Entry(player=e["player"], items=tuple(e["items"]), value=int(e["value"]), seed=e["seed"],
+                     at=datetime.fromisoformat(e["at"])) for e in r["entries"]]
+    return Game(id=r["id"], mode=Mode(r["mode"]), status=GameStatus(r["status"]),
+                side=Side(r["side"]) if r["side"] else None, entries=entries, server_seed=r["server_seed"],
+                created_at=r["created_at"], updated_at=r["updated_at"], closes_at=r["closes_at"], roll=r["roll"],
+                winner=r["winner"])
+
+
+def _game_row(g: Game) -> dict[str, Any]:
+    entries = [{"player": e.player, "items": list(e.items), "value": e.value, "seed": e.seed, "at": e.at.isoformat()}
+               for e in g.entries]
+    return {"id": g.id, "mode": g.mode.value, "status": g.status.value, "side": g.side.value if g.side else None,
+            "entries": Jsonb(entries), "players": g.players, "server_seed": g.server_seed, "created_at": g.created_at,
+            "updated_at": g.updated_at, "closes_at": g.closes_at, "roll": g.roll, "winner": g.winner}
 
 
 class PostgresUnit:
@@ -181,8 +238,8 @@ class PostgresUnit:
         return item
 
     def save_item(self, item: Item) -> None:
-        self.c.execute("UPDATE items SET owner = %s, acquired_at = %s, tradable_at = %s WHERE id = %s",
-                       (item.owner, item.acquired_at, item.tradable_at, item.id))
+        self.c.execute("UPDATE items SET owner = %s, acquired_at = %s, tradable_at = %s, staked = %s WHERE id = %s",
+                       (item.owner, item.acquired_at, item.tradable_at, item.staked, item.id))
 
     def minted(self, key: str, edition: Edition) -> int:
         row = self.c.execute("SELECT last FROM serials WHERE key = %s AND edition = %s",
@@ -190,14 +247,14 @@ class PostgresUnit:
         return int(row["last"]) if row else 0
 
     def add_transfer(self, t: Transfer) -> None:
-        self.c.execute("INSERT INTO transfers (item, from_owner, to_owner, at, trade) VALUES (%s, %s, %s, %s, %s)",
-                       (t.item, t.from_owner, t.to_owner, t.at, t.trade))
+        self.c.execute("INSERT INTO transfers (item, from_owner, to_owner, at, trade, game) "
+                       "VALUES (%s, %s, %s, %s, %s, %s)", (t.item, t.from_owner, t.to_owner, t.at, t.trade, t.game))
 
     def transfers(self, item_id: str) -> builtins.list[Transfer]:
-        rows = self.c.execute("SELECT item, from_owner, to_owner, at, trade FROM transfers WHERE item = %s "
+        rows = self.c.execute("SELECT item, from_owner, to_owner, at, trade, game FROM transfers WHERE item = %s "
                               "ORDER BY seq", (item_id,)).fetchall()
         return [Transfer(item=r["item"], from_owner=r["from_owner"], to_owner=r["to_owner"], at=r["at"],
-                         trade=r["trade"]) for r in rows]
+                         trade=r["trade"], game=r["game"]) for r in rows]
 
     def claims(self, owner: str) -> set[str]:
         return {r["source"] for r in self.c.execute("SELECT source FROM claims WHERE owner = %s", (owner,))}
@@ -235,6 +292,40 @@ class PostgresUnit:
                              "AND expires_at > %s", (sender, now)).fetchone()
         return int(row["n"]) if row else 0
 
+    def game(self, game_id: str, lock: bool = False) -> Game | None:
+        q = SELECT_GAMES + sql.SQL(" WHERE id = %s") + sql.SQL(" FOR UPDATE" if lock else "")
+        row = self.c.execute(q, (game_id,)).fetchone()
+        return _game(row) if row else None
+
+    def add_game(self, g: Game) -> None:
+        self.c.execute(sql.SQL("INSERT INTO games ({}) VALUES ({})").format(
+            sql.SQL(", ").join(sql.Identifier(c) for c in GAME_COLUMNS),
+            sql.SQL(", ").join(sql.Placeholder(c) for c in GAME_COLUMNS)), _game_row(g))
+
+    def save_game(self, g: Game) -> None:
+        self.c.execute("UPDATE games SET status = %(status)s, entries = %(entries)s, players = %(players)s, "
+                       "updated_at = %(updated_at)s, closes_at = %(closes_at)s, roll = %(roll)s, winner = %(winner)s "
+                       "WHERE id = %(id)s", _game_row(g))
+
+    def open_jackpot(self, lock: bool = False) -> Game | None:
+        if lock:  # (also when there is none: then this unit may open it)
+            self.c.execute("SELECT pg_advisory_xact_lock(hashtext('balatro_items.jackpot'))")
+        q = SELECT_GAMES + sql.SQL(" WHERE mode = 'jackpot' AND status = 'open'") + sql.SQL(
+            " FOR UPDATE" if lock else "")
+        row = self.c.execute(q).fetchone()
+        return _game(row) if row else None
+
+    def games(self, mode: Mode | None, status: GameStatus, player: str | None, limit: int) -> builtins.list[Game]:
+        cond = [sql.SQL("status = %(status)s")]
+        if mode is not None:
+            cond.append(sql.SQL("mode = %(mode)s"))
+        if player is not None:
+            cond.append(sql.SQL("players @> ARRAY[%(player)s]::text[]"))
+        q = SELECT_GAMES + sql.SQL(" WHERE ") + sql.SQL(" AND ").join(cond) + sql.SQL(
+            " ORDER BY updated_at DESC, id DESC LIMIT %(n)s")
+        rows = self.c.execute(q, {"status": status.value, "mode": mode.value if mode else None, "player": player,
+                                  "n": limit}).fetchall()
+        return [_game(r) for r in rows]
 
 
 class PostgresStore:

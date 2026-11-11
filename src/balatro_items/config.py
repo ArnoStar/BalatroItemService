@@ -17,6 +17,8 @@ class Settings:
     cors_origins: tuple[str, ...] = ("*",)
     admins: tuple[str, ...] = ()  # account ids that may give items, besides the admin role
     trade_hold_days: float = 7  # an item that changes hands (or is found) can't again for this long
+    casino: bool = True  # False: nothing can be staked in the casino (staked items can still be taken back)
+    jackpot_seconds: float = 60  # from the second player in the jackpot to its draw
     # sign-in with the identity service: on when the JWKS URL is set; then the issuer is required too
     auth_jwks_url: str | None = None
     auth_issuer: str | None = None
@@ -29,6 +31,8 @@ class Settings:
             raise ValueError("BALATRO_ITEMS_AUTH_ISSUER is required with BALATRO_ITEMS_AUTH_JWKS_URL")
         if self.trade_hold_days < 0:
             raise ValueError("BALATRO_ITEMS_TRADE_HOLD_DAYS can't be negative")
+        if self.jackpot_seconds <= 0:
+            raise ValueError("BALATRO_ITEMS_JACKPOT_SECONDS is more than 0")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> Settings:
@@ -43,6 +47,8 @@ class Settings:
             cors_origins=items("BALATRO_ITEMS_CORS_ORIGINS") or d.cors_origins,
             admins=items("BALATRO_ITEMS_ADMINS"),
             trade_hold_days=float(env.get("BALATRO_ITEMS_TRADE_HOLD_DAYS", d.trade_hold_days)),
+            casino=env.get("BALATRO_ITEMS_CASINO", "on").strip().lower() not in ("off", "0", "false", "no"),
+            jackpot_seconds=float(env.get("BALATRO_ITEMS_JACKPOT_SECONDS", d.jackpot_seconds)),
             auth_jwks_url=env.get("BALATRO_ITEMS_AUTH_JWKS_URL") or None,
             auth_issuer=(env.get("BALATRO_ITEMS_AUTH_ISSUER") or "").rstrip("/") or None,
             auth_audience=env.get("BALATRO_ITEMS_AUTH_AUDIENCE") or d.auth_audience,

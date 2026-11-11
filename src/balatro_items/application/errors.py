@@ -25,3 +25,9 @@ class GameApiUnavailable(DomainError):
 
 class UnknownTemplate(DomainError):
     code = "unknown_item"
+
+
+class CasinoClosed(DomainError):
+    """The casino is off (BALATRO_ITEMS_CASINO): nothing can be staked, staked items can still be taken back."""
+
+    code = "casino_closed"

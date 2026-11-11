@@ -76,3 +76,26 @@ class NotParticipant(DomainError):
     """The caller may not do this to this trade (accept their own offer ...)."""
 
     code = "not_allowed"
+
+
+class GameNotFound(DomainError):
+    code = "game_not_found"
+
+    def __init__(self, game_id: str) -> None:
+        super().__init__(f"no casino game {game_id!r}")
+
+
+class InvalidBet(DomainError):
+    """A stake that can't be made: no items, too many, worth too much or too little ..."""
+
+    code = "invalid_bet"
+
+
+class GameClosed(DomainError):
+    """The game was drawn or cancelled."""
+
+    code = "game_closed"
+
+
+class TooManyGames(DomainError):
+    code = "too_many_games"
