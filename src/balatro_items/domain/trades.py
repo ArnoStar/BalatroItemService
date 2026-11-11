@@ -71,13 +71,18 @@ def check_offer(sender: str, recipient: str, give: Sequence[str], take: Sequence
 
 
 def check_items(owner: str, ids: Sequence[str], items: dict[str, Item], now: datetime, *, moved: bool) -> None:
-    """Each item is ``owner``'s and out of its trade hold (``moved``: say that the offer is out of date)."""
+    """Each item is ``owner``'s, out of its trade hold and not staked in the casino (``moved``: say that the
+    offer is out of date)."""
     for i in ids:
         item = items.get(i)
         if item is None or item.owner != owner:
             if moved:
                 raise ItemsMoved("an item of this offer has changed hands since")
             raise NotOwner(f"item {i!r} isn't this player's")
+        if item.staked is not None:
+            if moved:
+                raise ItemsMoved("an item of this offer is staked in the casino")
+            raise ItemLocked(f"item {i!r} is staked in the casino until its game ends")
         if not item.tradable(now):
             if moved:
                 raise ItemsMoved("an item of this offer has changed hands since: it is in its trade hold")

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from balatro_items.application.dto import Gift, NewTrade
-from balatro_items.domain import MAX_SIDE, Edition
+from balatro_items.application.dto import Gift, NewBet, NewTrade
+from balatro_items.domain import MAX_SIDE, MAX_STAKE, Edition, Side
 
 ItemIds = list[str]
 
@@ -36,3 +36,22 @@ class GiftRequest(BaseModel):
 
     def to_dto(self) -> Gift:
         return Gift(to=self.to, key=self.key, edition=self.edition, stake=self.stake)
+
+
+class BetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: ItemIds = Field(min_length=1, max_length=MAX_STAKE,
+                           description="Your items to stake (out of their trade hold, not staked elsewhere)")
+    seed: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,64}$",
+                             description="Your seed for the draw (provably fair: GET /v1/casino/rules); none: a "
+                                         "random one")
+
+    def to_dto(self) -> NewBet:
+        return NewBet(items=self.items, seed=self.seed)
+
+
+class CoinflipRequest(BetRequest):
+    side: Side = Field(Side.CHIPS, description="Your side of the coin; the other player gets the other")
+
+    def to_dto(self) -> NewBet:
+        return NewBet(items=self.items, seed=self.seed, side=self.side)

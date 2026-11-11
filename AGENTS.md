@@ -6,9 +6,10 @@ describes the service.
 ## What this project is
 
 The players' collectible items of Balatro in the browser: jokers and tags with
-the game's editions, linked to their accounts, found by playing and traded
-between players. **An item changes nothing in a run**: the game shows it (the
-title screen, the profile), it never plays it.
+the game's editions, linked to their accounts, found by playing, traded
+between players and staked against each other in the casino. **An item
+changes nothing in a run**: the game shows it (the title screen, the
+profile), it never plays it.
 
 ## Rules
 
@@ -27,7 +28,14 @@ title screen, the profile), it never plays it.
 5. **The game API decides what a run is** (counted, won, its deck and stake).
    The service reads it with the player's own token and never writes to it.
 6. **Randomness is the system's** (`infrastructure/system.py`): nobody may
-   predict or replay a drop. Tests use a seeded generator.
+   predict or replay a drop, nor guess a casino game's server seed. Tests use
+   a seeded generator.
+7. **The casino only moves items between players** (`domain/casino.py`). It
+   makes no item and keeps none (no house, no cut); it plays by the trade
+   rules (a first win, the trade hold); staked items can't change hands until
+   their game ends, and items won are `Transfer`s with the game. Draws are
+   provably fair: never show a server seed before its game is over, and never
+   change how a roll is computed (games already played must still check out).
 
 ## Architecture
 
@@ -47,6 +55,9 @@ mapped in `presentation/http/errors.py`.
 - **A new kind of item:** `Kind`, the catalog adapter
   (`infrastructure/game_api.py`), the game (`BalatroFrontEnd`,
   `entities/item`) and the portal (`entities/item`) draw it.
+- **A casino game or limit:** `domain/casino.py`, with unit tests in
+  `tests/unit/test_casino.py`; keep the README's "The casino" and
+  `GET /v1/casino/rules` true.
 - **The schema:** add a migration at the end of `MIGRATIONS`; never edit a
   released one. Test both stores (`tests/integration/test_stores.py`).
 

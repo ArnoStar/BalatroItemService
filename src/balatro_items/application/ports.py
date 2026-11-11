@@ -8,7 +8,18 @@ from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Protocol
 
-from balatro_items.domain import Edition, Item, PlayerRecord, RunRecord, Template, Trade, Transfer
+from balatro_items.domain import (
+    Edition,
+    Game,
+    GameStatus,
+    Item,
+    Mode,
+    PlayerRecord,
+    RunRecord,
+    Template,
+    Trade,
+    Transfer,
+)
 
 from .dto import Player
 
@@ -67,6 +78,20 @@ class Unit(Protocol):
 
     def pending_from(self, sender: str, now: datetime) -> int: ...
 
+    def game(self, game_id: str, lock: bool = False) -> Game | None: ...
+
+    def add_game(self, g: Game) -> None: ...
+
+    def save_game(self, g: Game) -> None: ...
+
+    def open_jackpot(self, lock: bool = False) -> Game | None:
+        """The pot taking items. ``lock``: no other unit gets the jackpot until this one ends (even
+        when there is none: this unit may open it)."""
+        ...
+
+    def games(self, mode: Mode | None, status: GameStatus, player: str | None, limit: int) -> builtins.list[Game]:
+        """Games in this status (of this mode, with this player), the last changed first."""
+        ...
 
 
 class Store(Protocol):
@@ -102,3 +127,9 @@ class Clock(Protocol):
 
 class IdGenerator(Protocol):
     def new_id(self) -> str: ...
+
+
+class SeedSource(Protocol):
+    def seed(self) -> str:
+        """A new secret nobody can guess (a casino game's server seed): 64 hex digits."""
+        ...

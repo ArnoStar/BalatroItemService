@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from balatro_items.domain import Edition, Item, PlayerRecord, Trade, TradeStatus, Transfer
+from balatro_items.domain import Edition, Game, GameStatus, Item, Mode, PlayerRecord, Trade, TradeStatus, Transfer
 
 
 @dataclass
@@ -25,6 +25,7 @@ class _State:
     transfers: list[Transfer] = field(default_factory=list)
     claims: dict[str, dict[str, tuple[str, str | None, datetime]]] = field(default_factory=dict)
     trades: dict[str, Trade] = field(default_factory=dict)
+    games: dict[str, Game] = field(default_factory=dict)
 
 
 class MemoryUnit:
@@ -107,6 +108,25 @@ class MemoryUnit:
         return sum(1 for t in self.s.trades.values()
                    if t.sender == sender and t.status_at(now) is TradeStatus.PENDING)
 
+    def game(self, game_id: str, lock: bool = False) -> Game | None:
+        g = self.s.games.get(game_id)
+        return copy.deepcopy(g) if g else None
+
+    def add_game(self, g: Game) -> None:
+        self.s.games[g.id] = copy.deepcopy(g)
+
+    def save_game(self, g: Game) -> None:
+        self.s.games[g.id] = copy.deepcopy(g)
+
+    def open_jackpot(self, lock: bool = False) -> Game | None:
+        g = next((g for g in self.s.games.values() if g.mode is Mode.JACKPOT and g.status is GameStatus.OPEN), None)
+        return copy.deepcopy(g) if g else None
+
+    def games(self, mode: Mode | None, status: GameStatus, player: str | None, limit: int) -> builtins.list[Game]:
+        found = [g for g in self.s.games.values() if g.status is status and (mode is None or g.mode is mode)
+                 and (player is None or player in g.players)]
+        found.sort(key=lambda g: (g.updated_at, g.id), reverse=True)
+        return [copy.deepcopy(g) for g in found[:limit]]
 
 
 class MemoryStore:

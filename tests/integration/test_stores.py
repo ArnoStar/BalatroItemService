@@ -6,8 +6,24 @@ from datetime import timedelta
 
 import pytest
 
-from balatro_items.domain import OFFER_LIFETIME, Edition, Item, Kind, PlayerRecord, Rarity, Trade, TradeStatus, Transfer
+from balatro_items.domain import (
+    OFFER_LIFETIME,
+    Edition,
+    Entry,
+    Game,
+    GameStatus,
+    Item,
+    Kind,
+    Mode,
+    PlayerRecord,
+    Rarity,
+    Side,
+    Trade,
+    TradeStatus,
+    Transfer,
+)
 from balatro_items.infrastructure.persistence import MemoryStore
+from tests.api.test_casino import ALICE, BOB, check_draw, gift, out_of_hold, ready
 from tests.conftest import make_world
 from tests.fakes import T0
 from tests.tokens import token
@@ -121,3 +137,81 @@ def test_the_whole_service_on_postgres(pg) -> None:  # type: ignore[no-untyped-d
     w.clock.advance(seconds=10)
     assert w.client.post("/v1/me/drops", headers=alice).json()["found"] == []
     assert len(w.client.get("/v1/me/items", headers=alice).json()) == 5
+
+
+def test_staked_items_and_games_won(store) -> None:  # type: ignore[no-untyped-def]
+    with store.unit() as u:
+        u.save_player(player("p1", "Alice"))
+        u.add_item(item("i1", "p1"))
+    with store.unit() as u:
+        it = u.items(["i1"], lock=True)["i1"]
+        assert it.staked is None
+        it.staked = "g1"
+        u.save_item(it)
+        u.add_transfer(Transfer(item="i1", from_owner="p2", to_owner="p1", at=T0, game="g1"))
+    with store.unit() as u:
+        i1 = u.item("i1")
+        assert i1 is not None and i1.staked == "g1" and not i1.tradable(T0 + timedelta(days=30))
+        assert [(t.trade, t.game) for t in u.transfers("i1")] == [(None, "g1")]
+        assert u.items_of("p1")[0].staked == "g1"
+
+
+def test_casino_games(store) -> None:  # type: ignore[no-untyped-def]
+    def entry(p: str, *items: str, minutes: int = 0) -> Entry:
+        return Entry(player=p, items=items, value=100 * len(items), seed=f"seed-{p}",
+                     at=T0 + timedelta(minutes=minutes))
+
+    def game(gid: str, mode: Mode, *entries: Entry, minutes: int = 0) -> Game:
+        at = T0 + timedelta(minutes=minutes)
+        return Game(id=gid, mode=mode, status=GameStatus.OPEN, side=Side.MULT if mode is Mode.COINFLIP else None,
+                    entries=list(entries), server_seed=f"secret-{gid}", created_at=at, updated_at=at)
+
+    with store.unit() as u:
+        assert u.open_jackpot(lock=True) is None
+        u.add_game(game("g1", Mode.COINFLIP, entry("p1", "i1", "i2")))
+        jackpot = game("g2", Mode.JACKPOT, entry("p1", "i3"), entry("p2", "i4", minutes=1), minutes=1)
+        jackpot.closes_at = T0 + timedelta(minutes=2)
+        u.add_game(jackpot)
+        done = game("g3", Mode.COINFLIP, entry("p2", "i5"), entry("p3", "i6"), minutes=2)
+        done.status, done.roll, done.winner = GameStatus.DONE, 150, "p3"
+        u.add_game(done)
+    with store.unit() as u:
+        g1 = u.game("g1", lock=True)
+        assert g1 is not None and g1.side is Side.MULT and g1.server_seed == "secret-g1" and g1.closes_at is None
+        assert g1.entries == [entry("p1", "i1", "i2")] and g1.value == 200 and g1.roll is None
+        assert u.game("nope") is None
+        assert [g.id for g in u.games(Mode.COINFLIP, GameStatus.OPEN, None, 10)] == ["g1"]
+        assert [g.id for g in u.games(Mode.COINFLIP, GameStatus.OPEN, "p1", 10)] == ["g1"]
+        assert u.games(Mode.COINFLIP, GameStatus.OPEN, "p2", 10) == []
+        assert [g.id for g in u.games(None, GameStatus.DONE, "p3", 10)] == ["g3"]
+        j = u.open_jackpot(lock=True)
+        assert j is not None and j.id == "g2" and j.players == ["p1", "p2"] and j.closes_at == T0 + timedelta(minutes=2)
+        j.entries.append(entry("p1", "i7", minutes=3))
+        j.status, j.roll, j.winner, j.updated_at = GameStatus.DONE, 42, "p1", T0 + timedelta(minutes=3)
+        u.save_game(j)
+    with store.unit() as u:
+        assert u.open_jackpot() is None
+        j = u.game("g2")
+        assert j is not None and j.status is GameStatus.DONE and (j.roll, j.winner) == (42, "p1")
+        assert len(j.entries) == 3
+        assert [g.id for g in u.games(None, GameStatus.DONE, None, 10)] == ["g2", "g3"]
+        assert [g.id for g in u.games(Mode.JACKPOT, GameStatus.DONE, "p2", 1)] == ["g2"]
+
+
+def test_the_casino_on_postgres(pg) -> None:  # type: ignore[no-untyped-def]
+    w = make_world(store=pg())
+    c = w.client
+    ready(w)
+    a, b, a2, b2 = gift(w, "alice"), gift(w, "bob", "j_greedy_joker"), gift(w, "alice"), gift(w, "bob")
+    out_of_hold(w)
+    flip = c.post("/v1/casino/coinflips", headers=ALICE, json={"items": [a]}).json()
+    done = c.post(f"/v1/casino/coinflips/{flip['id']}/join", headers=BOB, json={"items": [b]}).json()
+    check_draw(done)
+    assert {c.get(f"/v1/items/{i}", headers=BOB).json()["item"]["owner"] for i in (a, b)} == {done["winner"]}
+    c.post("/v1/casino/jackpot", headers=ALICE, json={"items": [a2]})
+    pot = c.post("/v1/casino/jackpot", headers=BOB, json={"items": [b2]}).json()
+    w.clock.advance(seconds=61)
+    last = c.get("/v1/casino/jackpot", headers=ALICE).json()["last"]
+    assert last["id"] == pot["id"]
+    check_draw(last)
+    assert [g["id"] for g in c.get("/v1/casino/games?player=alice", headers=BOB).json()] == [pot["id"], done["id"]]

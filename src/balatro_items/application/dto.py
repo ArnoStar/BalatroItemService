@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from balatro_items.domain import Edition, Kind, Rarity, TradeStatus
+from balatro_items.domain import Edition, GameStatus, Kind, Mode, Rarity, Side, TradeStatus
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -41,7 +41,8 @@ class ItemView:
     found_at: datetime
     acquired_at: datetime  # when its owner got it
     tradable_at: datetime  # the end of its trade hold
-    tradable: bool
+    tradable: bool  # out of its trade hold and not staked
+    staked: str | None  # the casino game it is staked in (it can't change hands until the game ends)
     sprite: dict[str, Any] | None = None  # the game's sprite: {atlas, pos: {x, y}, soul_pos}
 
 
@@ -53,6 +54,7 @@ class TransferView:
     to_name: str | None
     at: datetime
     trade: str | None
+    game: str | None  # the casino game it was won in
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -153,3 +155,62 @@ class Gift:
     key: str
     edition: Edition = Edition.BASE
     stake: int | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class NewBet:
+    items: list[str]
+    seed: str | None = None  # the player's seed for the draw (None: a random one)
+    side: Side | None = None  # a new coinflip's side (None: Chips)
+
+
+@dataclass(frozen=True, kw_only=True)
+class EntryView:
+    player: str
+    player_name: str | None
+    items: list[ItemView]
+    value: int  # the items' value (their odds) when they were staked
+    chance: float  # percent of the pot
+    low: int  # its part of the pot: from low (included) to high (excluded); the roll in it wins
+    high: int
+    seed: str  # the player's seed
+    at: datetime
+
+
+@dataclass(frozen=True, kw_only=True)
+class GameView:
+    id: str
+    mode: Mode
+    status: GameStatus  # open, done, cancelled
+    side: Side | None  # a coinflip's first player's side (the second has the other)
+    entries: list[EntryView]  # in the order they came
+    value: int  # the pot
+    seed_hash: str  # SHA-256 of the server seed: shown from the start
+    server_seed: str | None  # shown once the game is over
+    roll: int | None  # the draw: the point of the pot that won (below value)
+    winner: str | None
+    winner_name: str | None
+    join_min: int | None  # an open coinflip: what the other player's items must be worth together
+    join_max: int | None
+    created_at: datetime
+    updated_at: datetime
+    closes_at: datetime | None  # when a jackpot is drawn (set once two players are in)
+
+
+@dataclass(frozen=True, kw_only=True)
+class JackpotView:
+    round: GameView | None  # the pot taking items (None: the next item opens one)
+    last: GameView | None  # the last pot drawn
+    now: datetime  # the service's time (count down to round.closes_at with it)
+
+
+@dataclass(frozen=True, kw_only=True)
+class CasinoRulesView:
+    open: bool  # False: nothing can be staked (staked items can still be taken back)
+    max_items: int  # in one stake
+    coinflip_margin: int  # percent: a coinflip's second player's items are worth this much more or less
+    max_open_coinflips: int  # a player's coinflips waiting for another player
+    jackpot_seconds: float  # from the second player in the pot to its draw
+    jackpot_max_players: int
+    jackpot_max_items: int
+    trade_hold_days: float  # the items won start it

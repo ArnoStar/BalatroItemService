@@ -1,5 +1,27 @@
-"""The items, how they are found, and how they are traded: no other layer here."""
+"""The items, how they are found, traded and staked in the casino: no other layer here."""
 
+from .casino import (
+    COINFLIP_MARGIN,
+    JACKPOT_MAX_ITEMS,
+    JACKPOT_MAX_PLAYERS,
+    MAX_OPEN_COINFLIPS,
+    MAX_STAKE,
+    Entry,
+    Game,
+    GameStatus,
+    Mode,
+    Side,
+    cancel,
+    check_bet,
+    check_join,
+    coinflip_range,
+    draw,
+    join_coinflip,
+    join_jackpot,
+    parts,
+    pay_out,
+    seed_hash,
+)
 from .drops import (
     BOOSTED,
     PREMIUM,
@@ -18,6 +40,9 @@ from .drops import (
 )
 from .errors import (
     DomainError,
+    GameClosed,
+    GameNotFound,
+    InvalidBet,
     InvalidTrade,
     ItemLocked,
     ItemNotFound,
@@ -25,6 +50,7 @@ from .errors import (
     NotOwner,
     NotParticipant,
     PlayerNotFound,
+    TooManyGames,
     TooManyOffers,
     TradeClosed,
     TradeNotFound,
@@ -36,10 +62,13 @@ from .trades import MAX_PENDING, MAX_SIDE, OFFER_LIFETIME, Trade, TradeStatus, c
 ANONYMOUS_PLAYER = "anonymous"
 
 __all__ = [
-    "ANONYMOUS_PLAYER", "BOOSTED", "MAX_PENDING", "MAX_SIDE", "OFFER_LIFETIME", "PREMIUM", "STANDARD", "TABLES",
-    "TAG_RARITY", "DomainError", "DropTable", "Edition", "Grant", "InvalidTrade", "Item", "ItemLocked",
-    "ItemNotFound", "ItemsMoved", "Kind", "NotOwner", "NotParticipant", "PlayerNotFound", "PlayerRecord",
-    "Random", "Rarity", "RunRecord", "Template", "TooManyOffers", "Trade", "TradeClosed", "TradeNotFound",
-    "TradeStatus", "TradingLocked", "Transfer", "check_items", "check_offer", "earned", "next_week", "odds",
-    "pools", "roll", "swap", "week_of",
+    "ANONYMOUS_PLAYER", "BOOSTED", "COINFLIP_MARGIN", "JACKPOT_MAX_ITEMS", "JACKPOT_MAX_PLAYERS",
+    "MAX_OPEN_COINFLIPS", "MAX_PENDING", "MAX_SIDE", "MAX_STAKE", "OFFER_LIFETIME", "PREMIUM", "STANDARD", "TABLES",
+    "TAG_RARITY", "DomainError", "DropTable", "Edition", "Entry", "Game", "GameClosed", "GameNotFound",
+    "GameStatus", "Grant", "InvalidBet", "InvalidTrade", "Item", "ItemLocked", "ItemNotFound", "ItemsMoved", "Kind",
+    "Mode", "NotOwner", "NotParticipant", "PlayerNotFound", "PlayerRecord", "Random", "Rarity", "RunRecord", "Side",
+    "Template", "TooManyGames", "TooManyOffers", "Trade", "TradeClosed", "TradeNotFound", "TradeStatus",
+    "TradingLocked", "Transfer", "cancel", "check_bet", "check_items", "check_join", "check_offer",
+    "coinflip_range", "draw", "earned", "join_coinflip", "join_jackpot", "next_week", "odds", "parts", "pay_out",
+    "pools", "roll", "seed_hash", "swap", "week_of",
 ]

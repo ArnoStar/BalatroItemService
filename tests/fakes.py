@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import random
 from datetime import UTC, datetime, timedelta
 
@@ -72,6 +73,17 @@ class Ids:
     def new_id(self) -> str:
         self.n += 1
         return f"id{self.n:04d}"
+
+
+class Seeds:
+    """Server seeds anyone can guess: tests only."""
+
+    def __init__(self) -> None:
+        self.n = 0
+
+    def seed(self) -> str:
+        self.n += 1
+        return hashlib.sha256(f"seed{self.n}".encode()).hexdigest()
 
 
 def rng(seed: int = 1) -> random.Random:

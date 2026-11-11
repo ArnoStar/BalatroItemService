@@ -4,6 +4,7 @@ import os
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from typing import Any
 
 import psycopg
 import pytest
@@ -16,7 +17,7 @@ from balatro_items.config import Settings
 from balatro_items.infrastructure.auth import JwtAuthenticator
 from balatro_items.infrastructure.persistence import MemoryStore, PostgresStore
 from balatro_items.presentation.http import create_app
-from tests.fakes import Clock, FakeCatalog, FakeRuns, Ids, rng
+from tests.fakes import Clock, FakeCatalog, FakeRuns, Ids, Seeds, rng
 from tests.tokens import AUDIENCE, ISSUER, FixedKeys
 
 # a PostgreSQL database the tests may use (each test gets its own schema, dropped
@@ -34,11 +35,12 @@ class World:
     client: TestClient
 
 
-def make_world(store: object | None = None, signed_in: bool = True) -> World:
+def make_world(store: object | None = None, signed_in: bool = True, **settings: Any) -> World:
     runs, catalog, clock = FakeRuns(), FakeCatalog(), Clock()
     auth = JwtAuthenticator(FixedKeys(), ISSUER, AUDIENCE) if signed_in else None
-    uses = build_use_cases(Settings(database="memory", admins=("root",)), store=store or MemoryStore(),  # type: ignore[arg-type]
-                           catalog=catalog, runs=runs, clock=clock, ids=Ids(), rng=rng(), authenticator=auth)
+    uses = build_use_cases(Settings(database="memory", admins=("root",), **settings), store=store or MemoryStore(),  # type: ignore[arg-type]
+                           catalog=catalog, runs=runs, clock=clock, ids=Ids(), rng=rng(), seeds=Seeds(),
+                           authenticator=auth)
     return World(uses=uses, runs=runs, catalog=catalog, clock=clock, client=TestClient(create_app(uses)))
 
 
