@@ -196,6 +196,19 @@ def test_casino_games(store) -> None:  # type: ignore[no-untyped-def]
         assert len(j.entries) == 3
         assert [g.id for g in u.games(None, GameStatus.DONE, None, 10)] == ["g2", "g3"]
         assert [g.id for g in u.games(Mode.JACKPOT, GameStatus.DONE, "p2", 1)] == ["g2"]
+        # a period, and the page before a game
+        later = T0 + timedelta(minutes=3)
+        assert [g.id for g in u.games(None, GameStatus.DONE, None, 10, since=later)] == ["g2"]
+        assert [g.id for g in u.games(None, GameStatus.DONE, None, 10, before=later)] == ["g3"]
+        # a dice game, a challenge
+        dice = game("g4", Mode.DICE, entry("p1", "i8"), minutes=4)
+        dice.chance, dice.opponent = 15, "p2"
+        u.add_game(dice)
+    with store.unit() as u:
+        d = u.game("g4")
+        assert d is not None and d.mode is Mode.DICE and (d.chance, d.opponent, d.side) == (15, "p2", None)
+        assert d.asked == 15 and u.game("g1").asked == 50  # type: ignore[union-attr]
+        assert [g.id for g in u.games(Mode.DICE, GameStatus.OPEN, None, 10)] == ["g4"]
 
 
 def test_the_casino_on_postgres(pg) -> None:  # type: ignore[no-untyped-def]
@@ -213,5 +226,7 @@ def test_the_casino_on_postgres(pg) -> None:  # type: ignore[no-untyped-def]
     w.clock.advance(seconds=61)
     last = c.get("/v1/casino/jackpot", headers=ALICE).json()["last"]
     assert last["id"] == pot["id"]
+    assert c.get("/v1/casino/players/alice/stats", headers=BOB).json()["games"] == 2
+    assert c.get("/v1/casino/leaderboard?period=day", headers=BOB).json()["games"] == 2
     check_draw(last)
     assert [g["id"] for g in c.get("/v1/casino/games?player=alice", headers=BOB).json()] == [pot["id"], done["id"]]

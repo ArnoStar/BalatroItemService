@@ -12,7 +12,7 @@ from .presentation.http import create_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 settings = Settings.from_env()
-app = create_app(build_use_cases(settings), settings.cors_origins)
+app = create_app(build_use_cases(settings), settings.cors_origins, settings.heartbeat)
 
 
 def run() -> None:

@@ -19,6 +19,7 @@ class Settings:
     trade_hold_days: float = 7  # an item that changes hands (or is found) can't again for this long
     casino: bool = True  # False: nothing can be staked in the casino (staked items can still be taken back)
     jackpot_seconds: float = 60  # from the second player in the jackpot to its draw
+    heartbeat: float = 20  # seconds between a live stream's keep-alive comments (proxies close idle connections)
     # sign-in with the identity service: on when the JWKS URL is set; then the issuer is required too
     auth_jwks_url: str | None = None
     auth_issuer: str | None = None
@@ -33,6 +34,8 @@ class Settings:
             raise ValueError("BALATRO_ITEMS_TRADE_HOLD_DAYS can't be negative")
         if self.jackpot_seconds <= 0:
             raise ValueError("BALATRO_ITEMS_JACKPOT_SECONDS is more than 0")
+        if self.heartbeat <= 0:
+            raise ValueError("BALATRO_ITEMS_HEARTBEAT is more than 0")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> Settings:
@@ -49,6 +52,7 @@ class Settings:
             trade_hold_days=float(env.get("BALATRO_ITEMS_TRADE_HOLD_DAYS", d.trade_hold_days)),
             casino=env.get("BALATRO_ITEMS_CASINO", "on").strip().lower() not in ("off", "0", "false", "no"),
             jackpot_seconds=float(env.get("BALATRO_ITEMS_JACKPOT_SECONDS", d.jackpot_seconds)),
+            heartbeat=float(env.get("BALATRO_ITEMS_HEARTBEAT", d.heartbeat)),
             auth_jwks_url=env.get("BALATRO_ITEMS_AUTH_JWKS_URL") or None,
             auth_issuer=(env.get("BALATRO_ITEMS_AUTH_ISSUER") or "").rstrip("/") or None,
             auth_audience=env.get("BALATRO_ITEMS_AUTH_AUDIENCE") or d.auth_audience,

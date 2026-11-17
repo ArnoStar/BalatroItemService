@@ -5,6 +5,7 @@ JWTs, checked with the public keys it publishes at ``/.well-known/jwks.json``
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Protocol
 
 import jwt
@@ -57,7 +58,8 @@ class JwtAuthenticator:
         name = claims.get("name")
         roles = claims.get("roles")
         roles = frozenset(r for r in roles if isinstance(r, str)) if isinstance(roles, list) else frozenset()
-        return Player(id=str(claims["sub"]), name=name if isinstance(name, str) else None, roles=roles, token=token)
+        return Player(id=str(claims["sub"]), name=name if isinstance(name, str) else None, roles=roles, token=token,
+                      expires_at=datetime.fromtimestamp(int(claims["exp"]), UTC))
 
 
 class AnonymousAuthenticator:

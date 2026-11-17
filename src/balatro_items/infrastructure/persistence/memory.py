@@ -122,9 +122,11 @@ class MemoryUnit:
         g = next((g for g in self.s.games.values() if g.mode is Mode.JACKPOT and g.status is GameStatus.OPEN), None)
         return copy.deepcopy(g) if g else None
 
-    def games(self, mode: Mode | None, status: GameStatus, player: str | None, limit: int) -> builtins.list[Game]:
+    def games(self, mode: Mode | None, status: GameStatus, player: str | None, limit: int,
+              since: datetime | None = None, before: datetime | None = None) -> builtins.list[Game]:
         found = [g for g in self.s.games.values() if g.status is status and (mode is None or g.mode is mode)
-                 and (player is None or player in g.players)]
+                 and (player is None or player in g.players) and (since is None or g.updated_at >= since)
+                 and (before is None or g.updated_at < before)]
         found.sort(key=lambda g: (g.updated_at, g.id), reverse=True)
         return [copy.deepcopy(g) for g in found[:limit]]
 

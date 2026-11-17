@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from balatro_items.application.dto import Gift, NewBet, NewTrade
-from balatro_items.domain import MAX_SIDE, MAX_STAKE, Edition, Side
+from balatro_items.domain import MAX_CHANCE, MAX_SIDE, MAX_STAKE, MIN_CHANCE, Edition, Side
 
 ItemIds = list[str]
 
@@ -52,6 +52,18 @@ class BetRequest(BaseModel):
 
 class CoinflipRequest(BetRequest):
     side: Side = Field(Side.CHIPS, description="Your side of the coin; the other player gets the other")
+    opponent: str | None = Field(None, max_length=200, description="A challenge: the only player (account id) "
+                                                                   "who may join; none: anyone")
 
     def to_dto(self) -> NewBet:
-        return NewBet(items=self.items, seed=self.seed, side=self.side)
+        return NewBet(items=self.items, seed=self.seed, side=self.side, opponent=self.opponent)
+
+
+class DiceRequest(BetRequest):
+    chance: int = Field(50, ge=MIN_CHANCE, le=MAX_CHANCE,
+                        description="Your chance, in percent: the other player's items must be worth what makes it so")
+    opponent: str | None = Field(None, max_length=200, description="A challenge: the only player (account id) "
+                                                                   "who may join; none: anyone")
+
+    def to_dto(self) -> NewBet:
+        return NewBet(items=self.items, seed=self.seed, chance=self.chance, opponent=self.opponent)

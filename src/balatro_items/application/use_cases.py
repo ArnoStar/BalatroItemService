@@ -9,16 +9,19 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from balatro_items.domain import (
     COINFLIP_MARGIN,
+    DUELS,
     JACKPOT_MAX_ITEMS,
     JACKPOT_MAX_PLAYERS,
+    MAX_CHANCE,
     MAX_OPEN_COINFLIPS,
     MAX_PENDING,
     MAX_STAKE,
+    MIN_CHANCE,
     OFFER_LIFETIME,
     TABLES,
     DomainError,
@@ -37,6 +40,7 @@ from balatro_items.domain import (
     Random,
     Rarity,
     Side,
+    Tally,
     Template,
     TooManyGames,
     TooManyOffers,
@@ -47,14 +51,16 @@ from balatro_items.domain import (
     Transfer,
     cancel,
     check_bet,
+    check_challenge,
+    check_chance,
     check_items,
     check_join,
     check_offer,
-    coinflip_range,
     draw,
     earned,
-    join_coinflip,
+    join_duel,
     join_jackpot,
+    join_range,
     next_week,
     odds,
     parts,
@@ -62,11 +68,16 @@ from balatro_items.domain import (
     pools,
     roll,
     swap,
+    tally,
     week_of,
+    winner_chance,
 )
 
 from .dto import (
+    CasinoEvent,
     CasinoRulesView,
+    CasinoSnapshotView,
+    CasinoStatsView,
     DropsView,
     EntryView,
     GameView,
@@ -74,20 +85,35 @@ from .dto import (
     ItemDetail,
     ItemView,
     JackpotView,
+    LeaderboardView,
     MeView,
+    ModeStatsView,
     NewBet,
     NewTrade,
     OddsView,
     Player,
     PlayerView,
+    RankView,
     RuleView,
     TableView,
     TradeView,
     TransferView,
     WeekView,
+    WinView,
 )
 from .errors import CasinoClosed, GameApiUnavailable, NotAdmin, UnknownTemplate
-from .ports import Authenticator, Catalog, Clock, IdGenerator, RunSource, SeedSource, Store, Unit
+from .ports import (
+    Authenticator,
+    CasinoFeed,
+    Catalog,
+    Clock,
+    FeedSubscription,
+    IdGenerator,
+    RunSource,
+    SeedSource,
+    Store,
+    Unit,
+)
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +135,17 @@ class Deps:
     auth_required: bool = True
     casino_open: bool = True  # False: nothing can be staked
     jackpot_wait: timedelta = timedelta(seconds=60)  # from the second player in the pot to its draw
+    feed: CasinoFeed = field(default_factory=lambda: NoFeed())  # the casino's live streams
+
+
+class NoFeed:
+    """No live streams (a Deps made without one)."""
+
+    def publish(self, event: CasinoEvent) -> None:
+        pass
+
+    def subscribe(self) -> FeedSubscription:
+        raise RuntimeError("this service has no live feed")
 
 
 def is_admin(deps: Deps, player: Player) -> bool:
@@ -509,8 +546,8 @@ class GiveItem:
 
 
 class Casino:
-    """What the casino's use cases share: staking items, ending games, showing them
-    (domain/casino.py has the games' rules)."""
+    """What the casino's use cases share: staking items, ending games, showing them, and telling the live
+    streams (domain/casino.py has the games' rules)."""
 
     def __init__(self, deps: Deps) -> None:
         self.deps, self.views = deps, Views(deps)
@@ -518,6 +555,11 @@ class Casino:
     def check_open(self) -> None:
         if not self.deps.casino_open:
             raise CasinoClosed("the casino is closed")
+
+    def publish(self, views: Sequence[GameView]) -> None:
+        """Once their transaction is done: every open live stream hears of the games."""
+        for v in views:
+            self.deps.feed.publish(CasinoEvent("game", v))
 
     def stake(self, u: Unit, player: Player, bet: NewBet, game_id: str, templates: Sequence[Template],
               now: datetime) -> Entry:
@@ -561,13 +603,14 @@ class Casino:
             log.info("%s %s: %s won %d items worth %d", game.mode.value, game.id, game.winner, len(game.items),
                      game.value)
 
-    def jackpot(self, u: Unit, now: datetime) -> Game | None:
-        """The pot taking items, after drawing it if its time has come (None: there is none). Holds the
-        jackpot until the unit ends."""
+    def jackpot(self, u: Unit, now: datetime, out: list[GameView]) -> Game | None:
+        """The pot taking items, after drawing it if its time has come (None: there is none; the drawn pot goes
+        to ``out``). Holds the jackpot until the unit ends."""
         game = u.open_jackpot(lock=True)
         if game is not None and game.due(now):
             draw(game, now)
             self.end(u, game, now)
+            out.append(self.view(u, game))
             return None
         return game
 
@@ -577,13 +620,15 @@ class Casino:
         with self.deps.store.unit() as u:
             game = u.open_jackpot()
         if game is not None and game.due(now):
+            out: list[GameView] = []
             with self.deps.store.unit() as u:
-                self.jackpot(u, now)
+                self.jackpot(u, now, out)
+            self.publish(out)
 
     def view(self, u: Unit, game: Game) -> GameView:
         items = {v.id: v for v in self.views.items(u, list(u.items(game.items).values()))}
         names: dict[str, str | None] = {}
-        for pid in game.players:
+        for pid in [*game.players, *([game.opponent] if game.opponent else [])]:
             rec = u.player(pid)
             names[pid] = rec.name if rec else None
         total = game.value
@@ -593,13 +638,23 @@ class Casino:
                              at=e.at)
                    for e, (low, high) in zip(game.entries, parts(game.entries), strict=True)]
         is_open = game.status is GameStatus.OPEN
-        join = coinflip_range(total) if is_open and game.mode is Mode.COINFLIP else None
+        join = join_range(total, game.asked) if is_open and game.mode in DUELS and total else None
         return GameView(
             id=game.id, mode=game.mode, status=game.status, side=game.side, entries=entries, value=total,
             seed_hash=game.seed_hash, server_seed=None if is_open else game.server_seed, roll=game.roll,
             winner=game.winner, winner_name=names.get(game.winner) if game.winner else None,
             join_min=join[0] if join else None, join_max=join[1] if join else None, created_at=game.created_at,
-            updated_at=game.updated_at, closes_at=game.closes_at)
+            updated_at=game.updated_at, closes_at=game.closes_at, chance=game.chance, opponent=game.opponent,
+            opponent_name=names.get(game.opponent) if game.opponent else None)
+
+    def win(self, u: Unit, game: Game, names: dict[str, str | None]) -> WinView:
+        winner = game.winner or ""
+        if winner not in names:
+            rec = u.player(winner)
+            names[winner] = rec.name if rec else None
+        return WinView(game=game.id, mode=game.mode, player=winner, player_name=names[winner], value=game.value,
+                       chance=round(100 * winner_chance(game), 2), players=len(game.players),
+                       items=len(game.items), at=game.updated_at)
 
 
 class CasinoRules:
@@ -612,35 +667,66 @@ class CasinoRules:
             open=d.casino_open, max_items=MAX_STAKE, coinflip_margin=COINFLIP_MARGIN,
             max_open_coinflips=MAX_OPEN_COINFLIPS, jackpot_seconds=d.jackpot_wait.total_seconds(),
             jackpot_max_players=JACKPOT_MAX_PLAYERS, jackpot_max_items=JACKPOT_MAX_ITEMS,
-            trade_hold_days=d.hold.total_seconds() / 86400)
+            trade_hold_days=d.hold.total_seconds() / 86400, dice_min_chance=MIN_CHANCE, dice_max_chance=MAX_CHANCE)
 
 
-class OpenCoinflips(Casino):
-    """The coinflips waiting for a second player, newest first."""
+class OpenDuels(Casino):
+    """The coinflips (or dice games) waiting for a second player, newest first; challenges too (``opponent``:
+    only they may join)."""
+
+    def __init__(self, deps: Deps, mode: Mode) -> None:
+        super().__init__(deps)
+        self.mode = mode
 
     def __call__(self, viewer: Player, limit: int = 100) -> list[GameView]:
         with self.deps.store.unit() as u:
-            return [self.view(u, g) for g in u.games(Mode.COINFLIP, GameStatus.OPEN, None, limit)]
+            return [self.view(u, g) for g in u.games(self.mode, GameStatus.OPEN, None, limit)]
 
 
-class CreateCoinflip(Casino):
+class CreateDuel(Casino):
+    """A coinflip (its first player's side) or a dice game (its first player's chance): items waiting for a
+    second player, or for the player challenged."""
+
+    def __init__(self, deps: Deps, mode: Mode) -> None:
+        super().__init__(deps)
+        self.mode = mode
+
     def __call__(self, player: Player, bet: NewBet) -> GameView:
         self.check_open()
         d = self.deps
+        chance = None
+        if self.mode is Mode.DICE:
+            chance = bet.chance if bet.chance is not None else 50
+            check_chance(chance)
+        check_challenge(player.id, bet.opponent)
         templates = d.catalog.templates()  # (outside the transaction: the game API may be slow)
         now = d.clock.now()
         with d.store.unit() as u:
-            if len(u.games(Mode.COINFLIP, GameStatus.OPEN, player.id, MAX_OPEN_COINFLIPS)) >= MAX_OPEN_COINFLIPS:
-                raise TooManyGames(f"at most {MAX_OPEN_COINFLIPS} open coinflips: cancel one first")
-            game = Game(id=d.ids.new_id(), mode=Mode.COINFLIP, status=GameStatus.OPEN, side=bet.side or Side.CHIPS,
-                        entries=[], server_seed=d.seeds.seed(), created_at=now, updated_at=now)
+            if len(u.games(self.mode, GameStatus.OPEN, player.id, MAX_OPEN_COINFLIPS)) >= MAX_OPEN_COINFLIPS:
+                raise TooManyGames(f"at most {MAX_OPEN_COINFLIPS} open {self.mode.value} games: cancel one first")
+            if bet.opponent is not None:
+                them = u.player(bet.opponent)
+                if them is None:
+                    raise PlayerNotFound(bet.opponent)
+                if not them.has_won:
+                    raise TradingLocked("this player can't play yet: the casino opens after a first win")
+            game = Game(id=d.ids.new_id(), mode=self.mode, status=GameStatus.OPEN,
+                        side=(bet.side or Side.CHIPS) if self.mode is Mode.COINFLIP else None, entries=[],
+                        server_seed=d.seeds.seed(), created_at=now, updated_at=now, opponent=bet.opponent,
+                        chance=chance)
             game.entries.append(self.stake(u, player, bet, game.id, templates, now))
             u.add_game(game)
-            return self.view(u, game)
+            view = self.view(u, game)
+        self.publish([view])
+        return view
 
 
-class JoinCoinflip(Casino):
-    """The second player's items: the coin is flipped at once, and the winner takes them all."""
+class JoinDuel(Casino):
+    """The second player's items: the coin is flipped (the dice rolled) at once, and the winner takes them all."""
+
+    def __init__(self, deps: Deps, mode: Mode) -> None:
+        super().__init__(deps)
+        self.mode = mode
 
     def __call__(self, player: Player, game_id: str, bet: NewBet) -> GameView:
         self.check_open()
@@ -649,27 +735,35 @@ class JoinCoinflip(Casino):
         now = d.clock.now()
         with d.store.unit() as u:
             game = u.game(game_id, lock=True)
-            if game is None or game.mode is not Mode.COINFLIP:
+            if game is None or game.mode is not self.mode:
                 raise GameNotFound(game_id)
             check_join(game, player.id)
-            join_coinflip(game, self.stake(u, player, bet, game.id, templates, now))
+            join_duel(game, self.stake(u, player, bet, game.id, templates, now))
             draw(game, now)
             self.end(u, game, now)
-            return self.view(u, game)
+            view = self.view(u, game)
+        self.publish([view])
+        return view
 
 
-class CancelCoinflip(Casino):
-    """Takes back the items of a coinflip nobody has joined (also when the casino is closed)."""
+class CancelDuel(Casino):
+    """Takes back the items of a coinflip (dice game) nobody has joined (also when the casino is closed)."""
+
+    def __init__(self, deps: Deps, mode: Mode) -> None:
+        super().__init__(deps)
+        self.mode = mode
 
     def __call__(self, player: Player, game_id: str) -> GameView:
         now = self.deps.clock.now()
         with self.deps.store.unit() as u:
             game = u.game(game_id, lock=True)
-            if game is None or game.mode is not Mode.COINFLIP:
+            if game is None or game.mode is not self.mode:
                 raise GameNotFound(game_id)
             cancel(game, player.id, now)
             self.end(u, game, now)
-            return self.view(u, game)
+            view = self.view(u, game)
+        self.publish([view])
+        return view
 
 
 class GetJackpot(Casino):
@@ -691,15 +785,19 @@ class JoinJackpot(Casino):
         d = self.deps
         templates = d.catalog.templates()
         now = d.clock.now()
+        out: list[GameView] = []
         with d.store.unit() as u:
-            game = self.jackpot(u, now)
+            game = self.jackpot(u, now, out)
             if game is None:
                 game = Game(id=d.ids.new_id(), mode=Mode.JACKPOT, status=GameStatus.OPEN, side=None, entries=[],
                             server_seed=d.seeds.seed(), created_at=now, updated_at=now)
                 u.add_game(game)
             join_jackpot(game, self.stake(u, player, bet, game.id, templates, now), d.jackpot_wait)
             u.save_game(game)
-            return self.view(u, game)
+            view = self.view(u, game)
+            out.append(view)
+        self.publish(out)
+        return view
 
 
 class LeaveJackpot(Casino):
@@ -707,13 +805,17 @@ class LeaveJackpot(Casino):
 
     def __call__(self, player: Player) -> GameView:
         now = self.deps.clock.now()
+        out: list[GameView] = []
         with self.deps.store.unit() as u:
-            game = self.jackpot(u, now)
+            game = self.jackpot(u, now, out)
             if game is None or player.id not in game.players:
                 raise NotParticipant("you have no items in the pot")
             cancel(game, player.id, now)
             self.end(u, game, now)
-            return self.view(u, game)
+            view = self.view(u, game)
+            out.append(view)
+        self.publish(out)
+        return view
 
 
 class GetGame(Casino):
@@ -729,17 +831,103 @@ class GetGame(Casino):
 
 
 class CasinoHistory(Casino):
-    """Games that are over, the last first: everyone's, or one player's."""
+    """Games that are over, the last first: everyone's, or one player's (``before``: older than this, for the
+    next page)."""
 
     def __call__(self, viewer: Player, player: str | None = None, mode: Mode | None = None,
-                 limit: int = 20) -> list[GameView]:
+                 limit: int = 20, before: datetime | None = None) -> list[GameView]:
         with self.deps.store.unit() as u:
-            return [self.view(u, g) for g in u.games(mode, GameStatus.DONE, player, limit)]
+            return [self.view(u, g) for g in u.games(mode, GameStatus.DONE, player, limit, before=before)]
+
+
+STATS_GAMES = 5000  # a player's statistics count their last games, this many at most
+LEADERBOARD_GAMES = 20000  # a leaderboard counts the period's last games, this many at most
+TOP = 10
+PERIODS = {"day": timedelta(days=1), "week": timedelta(days=7), "all": None}
+
+
+class CasinoStats(Casino):
+    """A player's games that are over, in numbers: games, wins, value staked, won and lost, their best wins
+    (public, as their games are)."""
+
+    def __call__(self, viewer: Player, player_id: str) -> CasinoStatsView:
+        with self.deps.store.unit() as u:
+            rec = u.player(player_id)
+            if rec is None:
+                raise PlayerNotFound(player_id)
+            t = tally(u.games(None, GameStatus.DONE, player_id, STATS_GAMES)).get(player_id, Tally(player=player_id))
+            names: dict[str, str | None] = {player_id: rec.name}
+            return CasinoStatsView(
+                player=player_id, name=rec.name, games=t.games, wins=t.wins, staked=t.staked, won=t.won, lost=t.lost,
+                net=t.net, modes={m.value: ModeStatsView(games=n, wins=w) for m, (n, w) in t.by_mode.items()},
+                biggest=self.win(u, t.biggest, names) if t.biggest else None,
+                luckiest=self.win(u, t.luckiest, names) if t.luckiest else None)
+
+
+class CasinoLeaderboard(Casino):
+    """The casino's best players and wins over a period (``PERIODS``)."""
+
+    def __call__(self, viewer: Player, period: str = "week") -> LeaderboardView:
+        if period not in PERIODS:
+            raise InvalidBet(f"a period is one of {', '.join(PERIODS)}")
+        span = PERIODS[period]
+        since = self.deps.clock.now() - span if span is not None else None
+        with self.deps.store.unit() as u:
+            games = u.games(None, GameStatus.DONE, None, LEADERBOARD_GAMES, since=since)
+            tallies = list(tally(games).values())
+            names: dict[str, str | None] = {}
+            for t in tallies:
+                rec = u.player(t.player)
+                names[t.player] = rec.name if rec else None
+
+            def rank(t: Tally) -> RankView:
+                return RankView(player=t.player, name=names[t.player], games=t.games, wins=t.wins, staked=t.staked,
+                                net=t.net)
+
+            winners = sorted((t for t in tallies if t.net > 0), key=lambda t: (-t.net, t.player))[:TOP]
+            stakers = sorted(tallies, key=lambda t: (-t.staked, t.player))[:TOP]
+            biggest = sorted(games, key=lambda g: (-g.value, g.id))[:TOP]
+            luckiest = sorted(games, key=lambda g: (winner_chance(g), -g.value, g.id))[:TOP]
+            return LeaderboardView(
+                period=period, since=since, games=len(games), value=sum(g.value for g in games),
+                players=len(tallies), winners=[rank(t) for t in winners], stakers=[rank(t) for t in stakers],
+                biggest=[self.win(u, g, names) for g in biggest], luckiest=[self.win(u, g, names) for g in luckiest])
+
+
+RECENT_GAMES = 12  # a live stream's first event has the last games drawn, this many
+
+
+class CasinoSnapshot(Casino):
+    """Everything the casino shows (a live stream's first event): the games waiting, the pot, the last draws."""
+
+    def __call__(self, viewer: Player) -> CasinoSnapshotView:
+        self.settle()
+        now = self.deps.clock.now()
+        with self.deps.store.unit() as u:
+            pot = u.open_jackpot()
+            last = u.games(Mode.JACKPOT, GameStatus.DONE, None, 1)
+            return CasinoSnapshotView(
+                coinflips=[self.view(u, g) for g in u.games(Mode.COINFLIP, GameStatus.OPEN, None, 100)],
+                dice=[self.view(u, g) for g in u.games(Mode.DICE, GameStatus.OPEN, None, 100)],
+                jackpot=JackpotView(round=self.view(u, pot) if pot else None,
+                                    last=self.view(u, last[0]) if last else None, now=now),
+                recent=[self.view(u, g) for g in u.games(None, GameStatus.DONE, None, RECENT_GAMES)],
+                rules=CasinoRules(self.deps)())
+
+
+class CasinoSubscribe:
+    """A live stream of the casino's changes (its first event: CasinoSnapshot)."""
+
+    def __init__(self, deps: Deps) -> None:
+        self.deps = deps
+
+    def __call__(self) -> FeedSubscription:
+        return self.deps.feed.subscribe()
 
 
 class SettleCasino(Casino):
-    """Draws the jackpot when its time has come (the service does it every few seconds, and any look at
-    the jackpot does too)."""
+    """Draws the jackpot when its time has come (the service does it every second, and any look at the jackpot
+    does too)."""
 
     def __call__(self) -> None:
         self.settle()
@@ -765,15 +953,23 @@ class UseCases:
     odds: GetOdds
     give: GiveItem
     casino_rules: CasinoRules
-    coinflips: OpenCoinflips
-    create_coinflip: CreateCoinflip
-    join_coinflip: JoinCoinflip
-    cancel_coinflip: CancelCoinflip
+    coinflips: OpenDuels
+    create_coinflip: CreateDuel
+    join_coinflip: JoinDuel
+    cancel_coinflip: CancelDuel
+    dice_games: OpenDuels
+    create_dice: CreateDuel
+    join_dice: JoinDuel
+    cancel_dice: CancelDuel
     jackpot: GetJackpot
     join_jackpot: JoinJackpot
     leave_jackpot: LeaveJackpot
     game: GetGame
     casino_history: CasinoHistory
+    casino_stats: CasinoStats
+    casino_leaderboard: CasinoLeaderboard
+    casino_snapshot: CasinoSnapshot
+    casino_subscribe: CasinoSubscribe
     settle_casino: SettleCasino
 
 
@@ -783,8 +979,11 @@ def build(deps: Deps, authenticator: Authenticator) -> UseCases:
         player_items=PlayerItems(deps), player=GetPlayer(deps), find_players=FindPlayers(deps), item=GetItem(deps),
         showcase=SetShowcase(deps), create_trade=CreateTrade(deps), trades=ListTrades(deps), trade=GetTrade(deps),
         accept=AcceptTrade(deps), decline=DeclineTrade(deps), cancel=CancelTrade(deps), odds=GetOdds(deps),
-        give=GiveItem(deps), casino_rules=CasinoRules(deps), coinflips=OpenCoinflips(deps),
-        create_coinflip=CreateCoinflip(deps), join_coinflip=JoinCoinflip(deps), cancel_coinflip=CancelCoinflip(deps),
-        jackpot=GetJackpot(deps), join_jackpot=JoinJackpot(deps), leave_jackpot=LeaveJackpot(deps), game=GetGame(deps),
-        casino_history=CasinoHistory(deps), settle_casino=SettleCasino(deps))
-
+        give=GiveItem(deps), casino_rules=CasinoRules(deps), coinflips=OpenDuels(deps, Mode.COINFLIP),
+        create_coinflip=CreateDuel(deps, Mode.COINFLIP), join_coinflip=JoinDuel(deps, Mode.COINFLIP),
+        cancel_coinflip=CancelDuel(deps, Mode.COINFLIP), dice_games=OpenDuels(deps, Mode.DICE),
+        create_dice=CreateDuel(deps, Mode.DICE), join_dice=JoinDuel(deps, Mode.DICE),
+        cancel_dice=CancelDuel(deps, Mode.DICE), jackpot=GetJackpot(deps), join_jackpot=JoinJackpot(deps),
+        leave_jackpot=LeaveJackpot(deps), game=GetGame(deps), casino_history=CasinoHistory(deps),
+        casino_stats=CasinoStats(deps), casino_leaderboard=CasinoLeaderboard(deps),
+        casino_snapshot=CasinoSnapshot(deps), casino_subscribe=CasinoSubscribe(deps), settle_casino=SettleCasino(deps))
