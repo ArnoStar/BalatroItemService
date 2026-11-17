@@ -22,7 +22,8 @@ Collectible items of Balatro: jokers and tags with the game's editions,
 linked to the players' accounts. They are found by playing (a few a week,
 and one for each new deck and stake won: `GET /v1/odds`), shown on the title
 screen and profile, traded between players, and staked in the casino
-(coinflips and a jackpot, between players only). They change nothing in a run.
+(coinflips, dice and a jackpot, between players only; live at `/v1/casino/live`).
+They change nothing in a run.
 
 With sign-in on, every route but `/health` and `/v1/odds` needs an access
 token from the identity service.
@@ -31,7 +32,7 @@ token from the identity service.
 
 log = logging.getLogger(__name__)
 
-SETTLE_EVERY = 2.0  # seconds: how often the jackpot is drawn when its time has come (if nobody looks at it)
+SETTLE_EVERY = 1.0  # seconds: how often the jackpot is drawn when its time has come (if nobody looks at it)
 
 
 async def settle_casino(use_cases: UseCases, every: float) -> None:
@@ -43,7 +44,7 @@ async def settle_casino(use_cases: UseCases, every: float) -> None:
         await asyncio.sleep(every)
 
 
-def create_app(use_cases: UseCases, cors_origins: Sequence[str] = ("*",)) -> FastAPI:
+def create_app(use_cases: UseCases, cors_origins: Sequence[str] = ("*",), heartbeat: float = 20) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         task = asyncio.create_task(settle_casino(use_cases, SETTLE_EVERY))
@@ -52,6 +53,7 @@ def create_app(use_cases: UseCases, cors_origins: Sequence[str] = ("*",)) -> Fas
 
     app = FastAPI(title="Balatro items", version=__version__, description=DESCRIPTION, lifespan=lifespan)
     app.state.use_cases = use_cases
+    app.state.heartbeat = heartbeat  # seconds between a live stream's keep-alive comments
     app.add_middleware(CORSMiddleware, allow_origins=list(cors_origins), allow_methods=["*"], allow_headers=["*"],
                        expose_headers=["Location", "WWW-Authenticate"])
     errors.install(app)

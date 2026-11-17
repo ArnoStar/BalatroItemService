@@ -20,6 +20,7 @@ class Player:
     name: str | None = None
     roles: frozenset[str] = frozenset()
     token: str | None = field(default=None, repr=False)
+    expires_at: datetime | None = None  # when their access token expires (a live stream ends then)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -162,6 +163,8 @@ class NewBet:
     items: list[str]
     seed: str | None = None  # the player's seed for the draw (None: a random one)
     side: Side | None = None  # a new coinflip's side (None: Chips)
+    chance: int | None = None  # a new dice game's chance for its first player, percent (None: 50)
+    opponent: str | None = None  # a new coinflip or dice game: a challenge only this player may join
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -190,11 +193,14 @@ class GameView:
     roll: int | None  # the draw: the point of the pot that won (below value)
     winner: str | None
     winner_name: str | None
-    join_min: int | None  # an open coinflip: what the other player's items must be worth together
+    join_min: int | None  # an open coinflip or dice game: what the other player's items must be worth together
     join_max: int | None
     created_at: datetime
     updated_at: datetime
     closes_at: datetime | None  # when a jackpot is drawn (set once two players are in)
+    chance: int | None = None  # a dice game: the chance its first player chose, percent (the second has the rest)
+    opponent: str | None = None  # a challenge: the only player who may join
+    opponent_name: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -214,3 +220,87 @@ class CasinoRulesView:
     jackpot_max_players: int
     jackpot_max_items: int
     trade_hold_days: float  # the items won start it
+    dice_min_chance: int = 5  # percent: the chances a dice game's first player may choose
+    dice_max_chance: int = 95
+
+
+@dataclass(frozen=True, kw_only=True)
+class WinView:
+    """A game someone won, in a line: a leaderboard's, a player's best."""
+
+    game: str
+    mode: Mode
+    player: str  # the winner
+    player_name: str | None
+    value: int  # the pot
+    chance: float  # the winner's chance, percent
+    players: int
+    items: int  # how many items the pot had
+    at: datetime
+
+
+@dataclass(frozen=True, kw_only=True)
+class ModeStatsView:
+    games: int
+    wins: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class CasinoStatsView:
+    """A player's games that are over, in numbers (their last ``STATS_GAMES``)."""
+
+    player: str
+    name: str | None
+    games: int
+    wins: int
+    staked: int  # the value of the items they put in
+    won: int  # the value they took from other players
+    lost: int  # the value of their items other players took
+    net: int  # won - lost
+    modes: dict[str, ModeStatsView]
+    biggest: WinView | None  # their biggest pot won
+    luckiest: WinView | None  # their least likely win
+
+
+@dataclass(frozen=True, kw_only=True)
+class RankView:
+    player: str
+    name: str | None
+    games: int
+    wins: int
+    staked: int
+    net: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class LeaderboardView:
+    """The casino's best over a period: day (the last 24 hours), week (the last 7 days) or all."""
+
+    period: str
+    since: datetime | None
+    games: int  # games drawn in the period
+    value: int  # the value of their pots together
+    players: int  # how many players played
+    winners: list[RankView]  # the most value won (net), first 10 (winners only)
+    stakers: list[RankView]  # the most value staked, first 10
+    biggest: list[WinView]  # the biggest pots, first 10
+    luckiest: list[WinView]  # the least likely wins, first 10
+
+
+@dataclass(frozen=True, kw_only=True)
+class CasinoSnapshotView:
+    """Everything the casino shows at once (a live stream's first event)."""
+
+    coinflips: list[GameView]  # waiting for a second player
+    dice: list[GameView]
+    jackpot: JackpotView
+    recent: list[GameView]  # the last games drawn
+    rules: CasinoRulesView
+
+
+@dataclass(frozen=True)
+class CasinoEvent:
+    """A change of the casino, live: ``game`` (a GameView: made, joined, drawn, cancelled, a pot's new entry)."""
+
+    type: str
+    data: Any

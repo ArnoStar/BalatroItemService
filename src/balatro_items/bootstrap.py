@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from .application.ports import Authenticator, Catalog, Clock, IdGenerator, RunSource, SeedSource, Store
+from .application.ports import Authenticator, CasinoFeed, Catalog, Clock, IdGenerator, RunSource, SeedSource, Store
 from .application.use_cases import Deps, UseCases, build
 from .config import Settings
 from .domain import Random
 from .infrastructure.auth import AnonymousAuthenticator, JwtAuthenticator
+from .infrastructure.feed import LocalFeed
 from .infrastructure.game_api import GameApi
 from .infrastructure.persistence import MemoryStore, PostgresStore
 from .infrastructure.system import SecretSeeds, SystemClock, SystemRandom, UuidGenerator
@@ -33,12 +34,12 @@ def build_store(settings: Settings) -> Store:
 def build_use_cases(settings: Settings, *, store: Store | None = None, catalog: Catalog | None = None,
                     runs: RunSource | None = None, clock: Clock | None = None, ids: IdGenerator | None = None,
                     rng: Random | None = None, seeds: SeedSource | None = None,
-                    authenticator: Authenticator | None = None) -> UseCases:
+                    authenticator: Authenticator | None = None, feed: CasinoFeed | None = None) -> UseCases:
     auth = authenticator or build_authenticator(settings)
     api = GameApi(settings.api_url) if catalog is None or runs is None else None
     deps = Deps(store=store if store is not None else build_store(settings), catalog=catalog or api,  # type: ignore[arg-type]
                 runs=runs or api, clock=clock or SystemClock(), ids=ids or UuidGenerator(),  # type: ignore[arg-type]
                 rng=rng or SystemRandom(), seeds=seeds or SecretSeeds(), hold=timedelta(days=settings.trade_hold_days),
                 admins=frozenset(settings.admins), auth_required=auth.required, casino_open=settings.casino,
-                jackpot_wait=timedelta(seconds=settings.jackpot_seconds))
+                jackpot_wait=timedelta(seconds=settings.jackpot_seconds), feed=feed or LocalFeed())
     return build(deps, auth)

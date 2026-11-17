@@ -6,9 +6,10 @@ import hashlib
 import random
 from datetime import UTC, datetime, timedelta
 
-from balatro_items.application.dto import Player
+from balatro_items.application.dto import CasinoEvent, Player
 from balatro_items.application.errors import GameApiUnavailable
 from balatro_items.domain import TAG_RARITY, Kind, Rarity, RunRecord, Template
+from balatro_items.infrastructure.feed import LocalFeed
 
 # a Wednesday
 T0 = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
@@ -88,3 +89,22 @@ class Seeds:
 
 def rng(seed: int = 1) -> random.Random:
     return random.Random(seed)
+
+
+class RecordingFeed(LocalFeed):
+    """The real feed, keeping a copy of every event it publishes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.published: list[CasinoEvent] = []
+
+    def publish(self, event: CasinoEvent) -> None:
+        self.published.append(event)
+        super().publish(event)
+
+    def games(self) -> list[tuple[str, str]]:
+        """(game id, status) of each game event."""
+        return [(e.data.id, e.data.status.value) for e in self.published if e.type == "game"]
+
+    def clear(self) -> None:
+        self.published.clear()

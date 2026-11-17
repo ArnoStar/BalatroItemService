@@ -1,13 +1,20 @@
 """The casino: players stake items against each other, and the winner takes them all.
 
-Two games, both between players only: the casino makes no item and keeps none
-(no house, no cut), so it changes who has items, never how many there are.
+Three games, all between players only: the casino makes no item and keeps
+none (no house, no cut), so it changes who has items, never how many there are.
 
 - **Coinflip**: a player stakes some items on a side (Chips or Mult); another
   player matches them with items worth about as much (``COINFLIP_MARGIN``
   percent more or less), and the coin is flipped at once.
+- **Dice**: the same duel, but the first player chooses their chance
+  (``MIN_CHANCE`` to ``MAX_CHANCE`` percent): the second player's items must be
+  worth what makes it so (``join_range``), and the roll decides at once. A long
+  shot stakes little against much; a safe bet stakes much against little.
 - **Jackpot**: one pot at a time, which anyone adds items to; once two players
   are in, it is drawn a while later (``wait``, the service's setting).
+
+A coinflip or a dice game may be a **challenge**: only the player it names may
+join it (everyone may still watch it, as every game).
 
 A player's chance is the value of their items over the value of the pot. An
 item's value is its odds, one in how many drops of the standard table it is
@@ -32,7 +39,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 
@@ -40,8 +47,10 @@ from .errors import GameClosed, InvalidBet, ItemsMoved, NotParticipant
 from .items import Item
 
 MAX_STAKE = 10  # items in one entry
-COINFLIP_MARGIN = 10  # percent: what the second player's items may be worth more or less than the first's
-MAX_OPEN_COINFLIPS = 5  # a player's coinflips waiting for another player
+COINFLIP_MARGIN = 10  # percent: what a duel's second player's items may be worth more or less than asked
+MAX_OPEN_COINFLIPS = 5  # a player's coinflips waiting for another player (and as many dice games)
+MIN_CHANCE = 5  # percent: the chances a dice game's first player may choose
+MAX_CHANCE = 95
 JACKPOT_MAX_PLAYERS = 10
 JACKPOT_MAX_ITEMS = 50
 MAX_SEED = 64
@@ -53,6 +62,10 @@ SEED_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXY
 class Mode(StrEnum):
     COINFLIP = "coinflip"
     JACKPOT = "jackpot"
+    DICE = "dice"
+
+
+DUELS = frozenset({Mode.COINFLIP, Mode.DICE})  # two players: the first stakes, the second matches
 
 
 class Side(StrEnum):
@@ -92,6 +105,13 @@ class Game:
     closes_at: datetime | None = None  # when a jackpot is drawn (set once two players are in)
     roll: int | None = None  # the draw: the point of the pot that won, below its value
     winner: str | None = None
+    opponent: str | None = None  # a challenge: the only player who may join (a coinflip or a dice game)
+    chance: int | None = None  # a dice game: the first player's chance, in percent (the second has the rest)
+
+    @property
+    def asked(self) -> int:
+        """The first player's chance (percent) a duel's second player must match: a dice game's, else half."""
+        return self.chance if self.chance is not None else 50
 
     @property
     def seed_hash(self) -> str:
@@ -155,23 +175,46 @@ def check_bet(ids: Sequence[str], seed: str) -> None:
         raise InvalidBet(f"a seed is 1 to {MAX_SEED} letters, digits, - or _")
 
 
+def join_range(value: int, chance: int = 50) -> tuple[int, int]:
+    """What a duel's second player's items must be worth (both included) against the first's, worth ``value``,
+    for the first to have ``chance`` percent of the pot: ``value * (100 - chance) / chance``, ``COINFLIP_MARGIN``
+    percent more or less."""
+    rest = 100 - chance
+    return ((value * rest * (100 - COINFLIP_MARGIN) + chance * 100 - 1) // (chance * 100),
+            value * rest * (100 + COINFLIP_MARGIN) // (chance * 100))
+
+
 def coinflip_range(value: int) -> tuple[int, int]:
     """What the second player's items must be worth (both included) against items worth ``value``."""
-    return (value * (100 - COINFLIP_MARGIN) + 99) // 100, value * (100 + COINFLIP_MARGIN) // 100
+    return join_range(value, 50)
+
+
+def check_chance(chance: int) -> None:
+    """A dice game's chance, as its first player chooses it."""
+    if not MIN_CHANCE <= chance <= MAX_CHANCE:
+        raise InvalidBet(f"a dice game's chance is {MIN_CHANCE} to {MAX_CHANCE} percent")
+
+
+def check_challenge(player: str, opponent: str | None) -> None:
+    """A duel's first player names who may join it (None: anyone)."""
+    if opponent is not None and opponent == player:
+        raise InvalidBet("challenge another player, not yourself")
 
 
 def check_join(game: Game, player: str) -> None:
-    """Whether the player may join this coinflip (before their items are staked)."""
+    """Whether the player may join this duel (before their items are staked)."""
     if game.status is not GameStatus.OPEN:
-        raise GameClosed(f"this coinflip is {game.status.value}")
+        raise GameClosed(f"this game is {game.status.value}")
     if player in game.players:
-        raise NotParticipant("this coinflip is yours: another player joins it")
+        raise NotParticipant("this game is yours: another player joins it")
+    if game.opponent is not None and player != game.opponent:
+        raise NotParticipant("this game is a challenge to another player")
 
 
-def join_coinflip(game: Game, entry: Entry) -> None:
-    """The second player's entry (draw the game then)."""
+def join_duel(game: Game, entry: Entry) -> None:
+    """A coinflip's or dice game's second entry (draw the game then): worth what the first player's chance asks."""
     check_join(game, entry.player)
-    low, high = coinflip_range(game.value)
+    low, high = join_range(game.value, game.asked)
     if not low <= entry.value <= high:
         raise InvalidBet(f"the items must be worth {low} to {high} together (yours: {entry.value})")
     game.entries.append(entry)
@@ -231,3 +274,58 @@ def pay_out(game: Game, items: Mapping[str, Item], now: datetime, hold: timedelt
                 item.acquired_at = now
                 item.tradable_at = now + hold
     return moved
+
+
+@dataclass(kw_only=True)
+class Tally:
+    """A player's games that are over (``tally``)."""
+
+    player: str
+    games: int = 0
+    wins: int = 0
+    staked: int = 0  # the value of the items they put in
+    won: int = 0  # the value they took from the other players
+    lost: int = 0  # the value of their items the other players took
+    by_mode: dict[Mode, tuple[int, int]] = field(default_factory=dict)  # games, wins
+    biggest: Game | None = None  # their biggest pot won
+    luckiest: Game | None = None  # their least likely win
+
+    @property
+    def net(self) -> int:
+        return self.won - self.lost
+
+
+def stake_of(game: Game, player: str) -> int:
+    """The value a player put in a game."""
+    return sum(e.value for e in game.entries if e.player == player)
+
+
+def winner_chance(game: Game) -> float:
+    """The share of the pot the winner had (0 to 1)."""
+    return stake_of(game, game.winner) / game.value if game.winner and game.value else 0.0
+
+
+def tally(games: Sequence[Game]) -> dict[str, Tally]:
+    """Each player's numbers over these games (the drawn ones count)."""
+    out: dict[str, Tally] = {}
+    for g in games:
+        if g.status is not GameStatus.DONE:
+            continue
+        for p in g.players:
+            t = out.setdefault(p, Tally(player=p))
+            staked = stake_of(g, p)
+            won = g.winner == p
+            t.games += 1
+            t.staked += staked
+            n, w = t.by_mode.get(g.mode, (0, 0))
+            t.by_mode[g.mode] = (n + 1, w + int(won))
+            if won:
+                t.wins += 1
+                t.won += g.value - staked
+                if t.biggest is None or g.value > t.biggest.value:
+                    t.biggest = g
+                if t.luckiest is None or winner_chance(g) < winner_chance(t.luckiest):
+                    t.luckiest = g
+            else:
+                t.lost += staked
+    return out

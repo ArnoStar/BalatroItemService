@@ -1,13 +1,20 @@
-"""The casino over HTTP: coinflips and the jackpot, between players, provably fair."""
+"""The casino over HTTP: coinflips, dice and the jackpot, between players, provably fair, live."""
 
 from __future__ import annotations
 
 import hashlib
 import hmac
+import json
+import threading
+import time
+from datetime import timedelta
 from typing import Any
 
+from balatro_items.application.dto import NewBet, Player
+from balatro_items.domain import Side
 from tests.api.test_http import ADMIN, ALICE, BOB, CAROL, find, win
 from tests.conftest import World, make_world
+from tests.tokens import token
 
 PLAYERS = {"alice": ALICE, "bob": BOB, "carol": CAROL}
 
@@ -204,3 +211,173 @@ def test_a_closed_casino_takes_nothing_but_gives_back() -> None:
     assert r.status_code == 403 and r.json()["code"] == "casino_closed"
     r = w.client.post("/v1/casino/jackpot", headers=ALICE, json={"items": [a]})
     assert r.status_code == 403 and r.json()["code"] == "casino_closed"
+
+
+def test_a_dice_game(world: World) -> None:
+    c = world.client
+    ready(world)
+    a = gift(world, "alice")
+    b1, b2, b3 = (gift(world, "bob", k) for k in ("j_joker", "j_greedy_joker", "j_lusty_joker"))
+    out_of_hold(world)
+    value = item(world, a)["item"]["odds"]
+    r = c.post("/v1/casino/dice", headers=ALICE, json={"items": [a], "chance": 4})
+    assert r.status_code == 422 and r.json()["code"] == "invalid_request"
+    r = c.post("/v1/casino/dice", headers=ALICE, json={"items": [a], "chance": 25, "seed": "long-shot"})
+    assert r.status_code == 201, r.text
+    g = r.json()
+    assert g["mode"] == "dice" and g["chance"] == 25 and g["side"] is None and g["opponent"] is None
+    assert g["join_min"] <= 3 * value <= g["join_max"] and g["join_min"] > 2 * value
+    assert [x["id"] for x in c.get("/v1/casino/dice", headers=CAROL).json()] == [g["id"]]
+    assert c.get("/v1/casino/coinflips", headers=CAROL).json() == []
+    # a dice game isn't a coinflip; one item isn't enough against a 25% chance
+    assert c.post(f"/v1/casino/coinflips/{g['id']}/join", headers=BOB, json={"items": [b1]}).status_code == 404
+    r = c.post(f"/v1/casino/dice/{g['id']}/join", headers=BOB, json={"items": [b1]})
+    assert r.status_code == 422 and r.json()["code"] == "invalid_bet"
+    r = c.post(f"/v1/casino/dice/{g['id']}/join", headers=BOB, json={"items": [b1, b2, b3]})
+    assert r.status_code == 200, r.text
+    done = r.json()
+    assert done["status"] == "done" and done["entries"][0]["chance"] == 25 and done["entries"][1]["chance"] == 75
+    check_draw(done)
+    assert (done["roll"] < value) == (done["winner"] == "alice")  # (the first part of the pot is the first player's)
+    assert all(item(world, i)["item"]["owner"] == done["winner"] for i in (a, b1, b2, b3))
+    assert c.get("/v1/casino/dice", headers=CAROL).json() == []
+    assert [x["id"] for x in c.get("/v1/casino/games?mode=dice", headers=CAROL).json()] == [done["id"]]
+
+
+def test_a_dice_game_nobody_joins_is_taken_back(world: World) -> None:
+    c = world.client
+    ready(world)
+    a = gift(world, "carol")
+    out_of_hold(world)
+    g = c.post("/v1/casino/dice", headers=CAROL, json={"items": [a], "chance": 80}).json()
+    assert c.post(f"/v1/casino/coinflips/{g['id']}/cancel", headers=CAROL).status_code == 404
+    r = c.post(f"/v1/casino/dice/{g['id']}/cancel", headers=CAROL)
+    assert r.status_code == 200 and r.json()["status"] == "cancelled"
+    assert item(world, a)["item"]["tradable"]
+
+
+def test_a_challenge(world: World) -> None:
+    c = world.client
+    ready(world)
+    a, b, c1 = gift(world, "alice"), gift(world, "bob"), gift(world, "carol")
+    out_of_hold(world)
+    r = c.post("/v1/casino/coinflips", headers=ALICE, json={"items": [a], "opponent": "alice"})
+    assert r.status_code == 422 and r.json()["code"] == "invalid_bet"
+    r = c.post("/v1/casino/coinflips", headers=ALICE, json={"items": [a], "opponent": "nobody"})
+    assert r.status_code == 404 and r.json()["code"] == "player_not_found"
+    c.get("/v1/me", headers={"Authorization": f"Bearer {token(sub='dan', name='Dan')}"})  # (no win yet)
+    r = c.post("/v1/casino/coinflips", headers=ALICE, json={"items": [a], "opponent": "dan"})
+    assert r.status_code == 403 and r.json()["code"] == "trading_locked"
+    assert item(world, a)["item"]["staked"] is None  # (nothing staked by a refused game)
+    g = c.post("/v1/casino/coinflips", headers=ALICE, json={"items": [a], "opponent": "bob"}).json()
+    # everyone sees it; only Bob may join
+    listed = c.get("/v1/casino/coinflips", headers=CAROL).json()
+    assert [(x["id"], x["opponent"], x["opponent_name"]) for x in listed] == [(g["id"], "bob", "Bob")]
+    r = c.post(f"/v1/casino/coinflips/{g['id']}/join", headers=CAROL, json={"items": [c1]})
+    assert r.status_code == 403 and r.json()["code"] == "not_allowed"
+    assert item(world, c1)["item"]["staked"] is None
+    r = c.post(f"/v1/casino/coinflips/{g['id']}/join", headers=BOB, json={"items": [b]})
+    assert r.status_code == 200 and r.json()["status"] == "done" and r.json()["opponent"] == "bob"
+
+
+def test_stats_and_the_leaderboard(world: World) -> None:
+    c = world.client
+    ready(world)
+    a1, a2 = gift(world, "alice"), gift(world, "alice", "j_greedy_joker")
+    b1, b2 = gift(world, "bob"), gift(world, "bob", "j_greedy_joker")
+    out_of_hold(world)
+    played = []
+    for mine, theirs in ((a1, b1), (a2, b2)):
+        g = c.post("/v1/casino/coinflips", headers=ALICE, json={"items": [mine]}).json()
+        world.clock.advance(seconds=1)
+        played.append(c.post(f"/v1/casino/coinflips/{g['id']}/join", headers=BOB, json={"items": [theirs]}).json())
+        out_of_hold(world)  # (what was won may be staked again)
+    value = played[0]["entries"][0]["value"]
+    wins = sum(g["winner"] == "alice" for g in played)
+    stats = c.get("/v1/casino/players/alice/stats", headers=CAROL).json()
+    assert (stats["games"], stats["wins"], stats["staked"]) == (2, wins, 2 * value)
+    assert stats["net"] == stats["won"] - stats["lost"] == (2 * wins - 2) * value
+    assert stats["modes"] == {"coinflip": {"games": 2, "wins": wins}}
+    assert (stats["biggest"] is None) == (wins == 0)
+    if stats["luckiest"]:
+        assert stats["luckiest"]["chance"] == 50 and stats["luckiest"]["player"] == "alice"
+    assert c.get("/v1/casino/players/carol/stats", headers=CAROL).json()["games"] == 0
+    assert c.get("/v1/casino/players/nobody/stats", headers=CAROL).status_code == 404
+
+    board = c.get("/v1/casino/leaderboard?period=all", headers=CAROL).json()
+    assert (board["games"], board["players"], board["value"]) == (2, 2, 4 * value)
+    assert len(board["biggest"]) == 2 and board["biggest"][0]["value"] == 2 * value
+    assert [r["net"] for r in board["winners"]] == sorted((r["net"] for r in board["winners"]), reverse=True)
+    assert all(r["net"] > 0 for r in board["winners"])
+    assert {r["player"] for r in board["stakers"]} == {"alice", "bob"}
+    # the week: the games were played more than a week ago (out_of_hold moved the clock on)
+    assert c.get("/v1/casino/leaderboard", headers=CAROL).json()["games"] == 0
+    r = c.get("/v1/casino/leaderboard?period=year", headers=CAROL)
+    assert r.status_code == 422
+    # the history, a page at a time
+    first = c.get("/v1/casino/games?limit=1", headers=CAROL).json()
+    older = c.get("/v1/casino/games", params={"limit": 5, "before": first[0]["updated_at"]}, headers=CAROL).json()
+    assert [g["id"] for g in first + older] == [played[1]["id"], played[0]["id"]]
+
+
+def test_every_change_is_told_live(world: World) -> None:
+    c = world.client
+    ready(world)
+    a, b, a2, c1 = gift(world, "alice"), gift(world, "bob"), gift(world, "alice", "j_lusty_joker"), gift(world, "carol")
+    out_of_hold(world)
+    world.feed.clear()
+    g = c.post("/v1/casino/coinflips", headers=ALICE, json={"items": [a]}).json()
+    c.post(f"/v1/casino/coinflips/{g['id']}/cancel", headers=ALICE)
+    g2 = c.post("/v1/casino/dice", headers=ALICE, json={"items": [a], "chance": 50}).json()
+    c.post(f"/v1/casino/dice/{g2['id']}/join", headers=BOB, json={"items": [b]})
+    assert world.feed.games() == [(g["id"], "open"), (g["id"], "cancelled"), (g2["id"], "open"), (g2["id"], "done")]
+    out_of_hold(world)
+    world.feed.clear()
+    winner = PLAYERS[c.get(f"/v1/casino/games/{g2['id']}", headers=BOB).json()["winner"]]
+    pot = c.post("/v1/casino/jackpot", headers=winner, json={"items": [a2 if winner is ALICE else b]}).json()
+    c.post("/v1/casino/jackpot", headers=CAROL, json={"items": [c1]})
+    world.clock.advance(seconds=61)
+    world.uses.settle_casino()
+    assert world.feed.games() == [(pot["id"], "open"), (pot["id"], "open"), (pot["id"], "done")]
+    world.uses.settle_casino()
+    assert len(world.feed.games()) == 3  # (drawn once)
+
+
+def test_the_live_stream(world: World) -> None:
+    ready(world)
+    a = gift(world, "alice")
+    out_of_hold(world)
+    # (the stream ends when its token expires: the test reads it whole)
+    short = {"Authorization": f"Bearer {token(sub='carol', name='Carol', lifetime=timedelta(seconds=1.2))}"}
+
+    def stake_while_carol_watches() -> None:
+        for _ in range(200):
+            if world.feed.streams:
+                break
+            time.sleep(0.01)
+        world.uses.create_coinflip(Player(id="alice", name="Alice"), NewBet(items=[a], side=Side.MULT))
+
+    threading.Thread(target=stake_while_carol_watches).start()
+    r = world.client.get("/v1/casino/live", headers=short)
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+    assert r.headers["x-accel-buffering"] == "no"
+    got = frames(r.text)
+    kind, hello = got[0]
+    assert kind == "hello" and hello["coinflips"] == [] and hello["dice"] == [] and hello["recent"] == []
+    assert hello["jackpot"]["round"] is None and hello["rules"]["dice_max_chance"] == 95
+    events = [e for e, _ in got]
+    assert events[-1] == "expired" and "ping" in events
+    game = next(d for e, d in got if e == "game")
+    assert game["status"] == "open" and game["side"] == "mult" and game["entries"][0]["player_name"] == "Alice"
+    assert world.feed.streams == 0
+
+
+def frames(text: str) -> list[tuple[str, Any]]:
+    out: list[tuple[str, Any]] = []
+    for block in text.split("\n\n"):
+        if block.startswith(": ping"):
+            out.append(("ping", None))
+        elif block.startswith("event: "):
+            lines = block.split("\n")
+            out.append((lines[0].removeprefix("event: "), json.loads(lines[1].removeprefix("data: "))))
+    return out

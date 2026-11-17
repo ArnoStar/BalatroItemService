@@ -14,9 +14,9 @@ holographic, polychrome, negative), linked to the player's account.
   is: one in N drops.
 - Players **trade** them: an offer of some items for some of another
   player's, accepted all at once.
-- Players **stake** them in the **casino**: coinflips and a jackpot, player
-  against player, provably fair (below). The casino makes no item and keeps
-  none.
+- Players **stake** them in the **casino**: coinflips, dice and a jackpot,
+  player against player, provably fair and live (below). The casino makes no
+  item and keeps none. Its own front end is BalatroCasino, at `/casino/`.
 - They **change nothing in a run**. The game shows the player's chosen item
   (their *showcase*) on the title screen in place of the Ace, with its
   edition's shader, and reveals new items when the player comes back to the
@@ -66,18 +66,27 @@ Foil, Rare, Ethereal, Double and Voucher uncommon, the others common.
 
 ## The casino
 
-Two games, between players only: the winner takes every item of the game. The
-casino has no items of its own and takes no cut, so it changes who has items,
-never how many there are.
+Three games, between players only: the winner takes every item of the game.
+The casino has no items of its own and takes no cut, so it changes who has
+items, never how many there are.
 
 - **Coinflip**: stake up to 10 items on a side, Chips or Mult. Another player
   matches them with items worth as much, 10% more or less (`join_min` to
   `join_max`), and the coin is flipped at once. Until then you may take your
   items back. At most 5 open coinflips per player.
+- **Dice**: the same duel, at the chance you choose, from 5% to 95%. The other
+  player's items must be worth what makes it so: against your items worth 100
+  at 25%, theirs are worth 300 (10% more or less), and they have the other 75%.
+  The first part of the pot is yours: a roll under your items' value wins. A
+  long shot stakes little against much; a safe bet much against little. At
+  most 5 open dice games per player.
 - **Jackpot**: one pot at a time. Put up to 10 items in at once (50 items and
   10 players at most); when a second player is in, the pot is drawn 60 seconds
   later (`BALATRO_ITEMS_JACKPOT_SECONDS`). Alone in it, you may take your items
   back.
+- **Challenges**: a coinflip or a dice game may name the only player who may
+  join it (`opponent`): a friend, or the player you just played. Everyone may
+  still watch it, as every game.
 
 **Value and chance.** An item is worth its odds: one in how many drops of the
 standard table it is (`odds`, so a Negative legendary weighs far more than a
@@ -106,6 +115,21 @@ to `high`, `high` excluded: the entries' values laid end to end, in order).
 the draw (the portal does, in the browser). Nobody could steer it: the server
 chose its seed before the players chose theirs, and they couldn't know it.
 
+**Live.** `GET /v1/casino/live` is a stream of server-sent events: `hello`
+first, with everything the casino shows (the coinflips and dice games waiting,
+the pot, the last draws, the rules), then `game` each time a game is made,
+joined and drawn, cancelled, or a pot takes an entry (the game as
+`/v1/casino/games/{id}` has it). It ends with `expired` when the access token
+expires and `reset` when the client falls behind: open another. The streams
+live in the service's memory: **run one process** (a second would need a
+shared feed first, such as PostgreSQL's LISTEN/NOTIFY).
+
+**Numbers.** `GET /v1/casino/players/{id}/stats` sums up a player's games that
+are over (their last 5,000): games, wins, the value staked, won from others
+and lost (`net`), by game, their biggest pot and their least likely win.
+`GET /v1/casino/leaderboard?period=day|week|all` has the most value won (net)
+and staked, the biggest pots and the least likely wins.
+
 `BALATRO_ITEMS_CASINO=off` closes the casino: nothing can be staked
 (`403 casino_closed`), staked items can still be taken back, and a pot that is
 counting down is still drawn.
@@ -133,16 +157,23 @@ own paths. With sign-in on, every route but `/health`, `/v1/odds` and
 | `GET /v1/trades/{id}` | one of your trades (`available`: it can still be accepted) |
 | `POST /v1/trades/{id}/accept`, `/decline`, `/cancel` | answer an offer made to you, or cancel yours |
 | `POST /v1/admin/gifts` | `{to, key, edition, stake}`: give an item (the admin role, or `BALATRO_ITEMS_ADMINS`) |
-| `GET /v1/casino/rules` | is the casino open, its limits, the jackpot's countdown |
-| `GET /v1/casino/coinflips` | the coinflips waiting for a player, newest first |
-| `POST /v1/casino/coinflips` | `{items, side: chips\|mult, seed}`: stake items on a coinflip |
+| `GET /v1/casino/rules` | is the casino open, its limits, the dice's chances, the jackpot's countdown |
+| `GET /v1/casino/live` | the casino, live (server-sent events: `hello`, then `game`) |
+| `GET /v1/casino/coinflips` | the coinflips waiting for a player (challenges too), newest first |
+| `POST /v1/casino/coinflips` | `{items, side: chips\|mult, seed, opponent}`: stake items on a coinflip (`opponent`: a challenge) |
 | `POST /v1/casino/coinflips/{id}/join` | `{items, seed}`: match it; the coin is flipped at once |
 | `POST /v1/casino/coinflips/{id}/cancel` | take back your coinflip's items (nobody joined) |
+| `GET /v1/casino/dice` | the dice games waiting for a player, newest first |
+| `POST /v1/casino/dice` | `{items, chance: 5-95, seed, opponent}`: stake items at the chance you choose |
+| `POST /v1/casino/dice/{id}/join` | `{items, seed}`: take the other side; rolled at once |
+| `POST /v1/casino/dice/{id}/cancel` | take back your dice game's items (nobody joined) |
 | `GET /v1/casino/jackpot` | `{round, last, now}`: the pot taking items, the last one drawn, the service's time |
 | `POST /v1/casino/jackpot` | `{items, seed}`: put items in the pot |
 | `POST /v1/casino/jackpot/leave` | take back your items (nobody else is in the pot) |
-| `GET /v1/casino/games?player=&mode=&limit=` | games that are over, the last first |
-| `GET /v1/casino/games/{id}` | a game: its entries (each with its items, value, chance, part of the pot and seed), `seed_hash`, and once over `server_seed`, `roll`, `winner` |
+| `GET /v1/casino/games?player=&mode=&limit=&before=` | games that are over, the last first (`before`: the next page) |
+| `GET /v1/casino/games/{id}` | a game: its entries (each with its items, value, chance, part of the pot and seed), `seed_hash`, `chance` and `opponent` (a dice game, a challenge), and once over `server_seed`, `roll`, `winner` |
+| `GET /v1/casino/players/{id}/stats` | a player's casino numbers |
+| `GET /v1/casino/leaderboard?period=day\|week\|all` | the casino's best over a period |
 
 Errors are problem details with a stable `code`: `item_not_found`,
 `player_not_found`, `trade_not_found`, `invalid_trade`, `not_owner`,
@@ -168,6 +199,7 @@ An item, as every answer has it:
 | `BALATRO_ITEMS_TRADE_HOLD_DAYS` | `7` | |
 | `BALATRO_ITEMS_CASINO` | `on` | `off`: nothing can be staked in the casino |
 | `BALATRO_ITEMS_JACKPOT_SECONDS` | `60` | from the second player in the pot to its draw |
+| `BALATRO_ITEMS_HEARTBEAT` | `20` | seconds between a live stream's keep-alive comments |
 | `BALATRO_ITEMS_ADMINS` | none | account ids that may give items, besides the admin role |
 | `BALATRO_ITEMS_AUTH_JWKS_URL` | unset (sign-in off) | the identity service's `/.well-known/jwks.json` |
 | `BALATRO_ITEMS_AUTH_ISSUER` | | required with the JWKS URL: the identity service's `PUBLIC_URL` |
@@ -203,9 +235,10 @@ Clean architecture, as BalatroWebAPI (`AGENTS.md`):
 ```
 src/balatro_items/
   domain/           Item, Trade and their rules; drops.py: the grants, tables, rolls and odds;
-                    casino.py: the coinflip, the jackpot, the draw
+                    casino.py: the coinflip, the dice, the jackpot, challenges, the draw, the tallies
   application/      use cases, DTOs, ports (the store's Unit, the game API, the clock, ids)
-  infrastructure/   auth (the identity service's tokens), game_api (runs, catalog), persistence (PostgreSQL, memory)
+  infrastructure/   auth (the identity service's tokens), game_api (runs, catalog), persistence (PostgreSQL, memory),
+                    feed (the casino's live streams, in memory)
   presentation/     http (FastAPI)
   bootstrap.py, config.py, main.py
 ```

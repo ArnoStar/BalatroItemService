@@ -1,20 +1,28 @@
 from __future__ import annotations
 
-from typing import Annotated
+import json
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
-from balatro_items.application.dto import CasinoRulesView, GameView, JackpotView
+from balatro_items.application.dto import CasinoRulesView, CasinoStatsView, GameView, JackpotView, LeaderboardView
 from balatro_items.domain import Mode
 from balatro_items.presentation.http.deps import CurrentPlayer, Uses
-from balatro_items.presentation.http.schemas import BetRequest, CoinflipRequest
+from balatro_items.presentation.http.schemas import BetRequest, CoinflipRequest, DiceRequest
 
 router = APIRouter(prefix="/v1/casino", tags=["casino"])
 
 
 @router.get("/rules", response_model=CasinoRulesView, summary="The casino's rules, in numbers")
 def rules(uses: Uses) -> CasinoRulesView:
-    """Is it open, how many items a stake holds, a coinflip's margin, the jackpot's countdown. Public.
+    """Is it open, how many items a stake holds, a duel's margin, the dice's chances, the jackpot's countdown.
+    Public.
 
     **Provably fair.** Each game has a secret server seed whose SHA-256 (``seed_hash``) is shown from
     the start; each entry has its player's seed. The draw is
@@ -27,6 +35,7 @@ def rules(uses: Uses) -> CasinoRulesView:
 
 @router.get("/coinflips", response_model=list[GameView], summary="The coinflips waiting for a player")
 def coinflips(player: CurrentPlayer, uses: Uses) -> list[GameView]:
+    """Challenges too: only their ``opponent`` may join them."""
     return uses.coinflips(player)
 
 
@@ -34,7 +43,8 @@ def coinflips(player: CurrentPlayer, uses: Uses) -> list[GameView]:
              summary="Stake items on a coinflip")
 def create_coinflip(body: CoinflipRequest, player: CurrentPlayer, uses: Uses) -> GameView:
     """Your items wait for another player to match them (``join_min`` to ``join_max``: what theirs must be
-    worth); you may take them back until then. You need a first win, and at most 5 open coinflips."""
+    worth), or for the player you challenge (``opponent``); you may take them back until then. You need a first
+    win, and at most 5 open coinflips."""
     return uses.create_coinflip(player, body.to_dto())
 
 
@@ -48,6 +58,33 @@ def join_coinflip(game_id: str, body: BetRequest, player: CurrentPlayer, uses: U
 @router.post("/coinflips/{game_id}/cancel", response_model=GameView, summary="Take back your coinflip's items")
 def cancel_coinflip(game_id: str, player: CurrentPlayer, uses: Uses) -> GameView:
     return uses.cancel_coinflip(player, game_id)
+
+
+@router.get("/dice", response_model=list[GameView], summary="The dice games waiting for a player")
+def dice_games(player: CurrentPlayer, uses: Uses) -> list[GameView]:
+    """Each with the ``chance`` its first player chose; challenges too (only their ``opponent`` may join)."""
+    return uses.dice_games(player)
+
+
+@router.post("/dice", response_model=GameView, status_code=status.HTTP_201_CREATED,
+             summary="Stake items on a dice game, at the chance you choose")
+def create_dice(body: DiceRequest, player: CurrentPlayer, uses: Uses) -> GameView:
+    """You choose your chance (5 to 95%): the other player's items must be worth what makes it so (``join_min``
+    to ``join_max``). The first part of the pot is yours: a roll under your items' value wins. At most 5 open
+    dice games; you may take your items back until someone joins."""
+    return uses.create_dice(player, body.to_dto())
+
+
+@router.post("/dice/{game_id}/join", response_model=GameView, summary="Take a dice game's other side: roll")
+def join_dice(game_id: str, body: BetRequest, player: CurrentPlayer, uses: Uses) -> GameView:
+    """Your items must be worth ``join_min`` to ``join_max`` together: you have the rest of the chance. Rolled at
+    once; the winner takes every item."""
+    return uses.join_dice(player, game_id, body.to_dto())
+
+
+@router.post("/dice/{game_id}/cancel", response_model=GameView, summary="Take back your dice game's items")
+def cancel_dice(game_id: str, player: CurrentPlayer, uses: Uses) -> GameView:
+    return uses.cancel_dice(player, game_id)
 
 
 @router.get("/jackpot", response_model=JackpotView, summary="The jackpot: the pot, and the last one drawn")
@@ -73,10 +110,84 @@ def leave_jackpot(player: CurrentPlayer, uses: Uses) -> GameView:
 def games(player: CurrentPlayer, uses: Uses,
           of: Annotated[str | None, Query(alias="player", description="only this player's")] = None,
           mode: Annotated[Mode | None, Query()] = None,
-          limit: Annotated[int, Query(ge=1, le=100)] = 20) -> list[GameView]:
-    return uses.casino_history(player, of, mode, limit)
+          limit: Annotated[int, Query(ge=1, le=100)] = 20,
+          before: Annotated[datetime | None, Query(description="older than this (the next page: the last "
+                                                               "game's updated_at)")] = None) -> list[GameView]:
+    if before is not None and before.tzinfo is None:
+        before = before.replace(tzinfo=UTC)
+    return uses.casino_history(player, of, mode, limit, before)
 
 
 @router.get("/games/{game_id}", response_model=GameView, summary="A casino game")
 def game(game_id: str, player: CurrentPlayer, uses: Uses) -> GameView:
     return uses.game(player, game_id)
+
+
+@router.get("/players/{player_id}/stats", response_model=CasinoStatsView, summary="A player's casino numbers")
+def player_stats(player_id: str, player: CurrentPlayer, uses: Uses) -> CasinoStatsView:
+    """Their games that are over: how many, won, the value staked, won from others and lost (``net``), by game,
+    their biggest pot and their least likely win. Public, as their games are."""
+    return uses.casino_stats(player, player_id)
+
+
+@router.get("/leaderboard", response_model=LeaderboardView, summary="The casino's best, over a period")
+def leaderboard(player: CurrentPlayer, uses: Uses,
+                period: Annotated[str, Query(pattern="^(day|week|all)$",
+                                             description="day: the last 24 hours, week: the last 7 days")] = "week",
+                ) -> LeaderboardView:
+    """The most value won (net) and staked, the biggest pots and the least likely wins; the period's games,
+    their value and players."""
+    return uses.casino_leaderboard(player, period)
+
+
+HEADERS = {
+    "Cache-Control": "no-cache",
+    # nginx (the portal's, and a proxy in front of it) passes each event on at once
+    "X-Accel-Buffering": "no",
+}
+
+
+def frame(event: str, data: Any) -> str:
+    return f"event: {event}\ndata: {json.dumps(jsonable_encoder(data), separators=(',', ':'))}\n\n"
+
+
+@router.get("/live", summary="The casino, live (server-sent events)",
+            responses={200: {"content": {"text/event-stream": {}},
+                             "description": "hello (everything: the games waiting, the pot, the last draws, the "
+                                            "rules), then game (a game made, joined, drawn, cancelled, or a pot's "
+                                            "new entry); ends with expired or reset"}})
+async def live(request: Request, player: CurrentPlayer, uses: Uses) -> StreamingResponse:
+    """Open it with ``fetch`` and the ``Authorization`` header (an EventSource can't send one). A comment comes
+    every few seconds (proxies close idle connections). It ends when the access token expires (``expired``:
+    open another with a fresh one) or when it falls behind (``reset``: open another)."""
+    sub = uses.casino_subscribe()
+    try:
+        hello = await run_in_threadpool(uses.casino_snapshot, player)
+    except BaseException:
+        sub.close()
+        raise
+    heartbeat: float = request.app.state.heartbeat
+
+    async def frames() -> AsyncIterator[str]:
+        try:
+            yield frame("hello", hello)
+            while True:
+                wait = heartbeat
+                if player.expires_at is not None:
+                    left = (player.expires_at - datetime.now(UTC)).total_seconds()
+                    if left <= 0:
+                        yield frame("expired", {})
+                        return
+                    wait = min(wait, left)
+                try:
+                    event = await sub.next(wait)
+                except EOFError:
+                    yield frame("reset", {})
+                    return
+                yield frame(event.type, event.data) if event is not None else ": ping\n\n"
+        finally:
+            sub.close()
+
+    # (the generator's own cleanup may not run when the client goes away first: the task runs then)
+    return StreamingResponse(frames(), media_type="text/event-stream", headers=HEADERS,
+                             background=BackgroundTask(sub.close))

@@ -36,6 +36,12 @@ profile), it never plays it.
    their game ends, and items won are `Transfer`s with the game. Draws are
    provably fair: never show a server seed before its game is over, and never
    change how a roll is computed (games already played must still check out).
+   A new game is a duel or a pot drawn the same way; a challenge only limits
+   who may join.
+8. **One process.** The casino's live streams (`infrastructure/feed.py`) are
+   in memory. Running two processes needs a shared feed first (for example
+   PostgreSQL LISTEN/NOTIFY): don't just add workers. Use cases publish a game
+   only once its transaction is done.
 
 ## Architecture
 
@@ -57,7 +63,8 @@ mapped in `presentation/http/errors.py`.
   `entities/item`) and the portal (`entities/item`) draw it.
 - **A casino game or limit:** `domain/casino.py`, with unit tests in
   `tests/unit/test_casino.py`; keep the README's "The casino" and
-  `GET /v1/casino/rules` true.
+  `GET /v1/casino/rules` true, publish its changes to the live feed, and show
+  it in BalatroCasino.
 - **The schema:** add a migration at the end of `MIGRATIONS`; never edit a
   released one. Test both stores (`tests/integration/test_stores.py`).
 

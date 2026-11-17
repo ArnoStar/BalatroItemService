@@ -127,6 +127,12 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX games_players ON games USING GIN (players);
     CREATE UNIQUE INDEX games_one_jackpot ON games (mode) WHERE mode = 'jackpot' AND status = 'open';
     """,
+    # 3: dice games (the first player's chance) and challenges (the only player who may join)
+    """
+    ALTER TABLE games ADD COLUMN opponent TEXT;
+    ALTER TABLE games ADD COLUMN chance SMALLINT;
+    CREATE INDEX games_updated ON games (status, updated_at DESC);
+    """,
 )
 
 ITEM_COLUMNS = ("id", "kind", "key", "edition", "rarity", "stake", "serial", "owner", "source", "source_run",
@@ -135,7 +141,7 @@ SELECT_ITEMS = sql.SQL("SELECT {} FROM items").format(sql.SQL(", ").join(sql.Ide
 SELECT_TRADES = ("SELECT id, sender, recipient, give, take, message, status, created_at, updated_at, expires_at "
                  "FROM trades")
 GAME_COLUMNS = ("id", "mode", "status", "side", "entries", "players", "server_seed", "created_at", "updated_at",
-                "closes_at", "roll", "winner")
+                "closes_at", "roll", "winner", "opponent", "chance")
 SELECT_GAMES = sql.SQL("SELECT {} FROM games").format(sql.SQL(", ").join(sql.Identifier(c) for c in GAME_COLUMNS))
 
 
@@ -176,7 +182,7 @@ def _game(r: DictRow) -> Game:
     return Game(id=r["id"], mode=Mode(r["mode"]), status=GameStatus(r["status"]),
                 side=Side(r["side"]) if r["side"] else None, entries=entries, server_seed=r["server_seed"],
                 created_at=r["created_at"], updated_at=r["updated_at"], closes_at=r["closes_at"], roll=r["roll"],
-                winner=r["winner"])
+                winner=r["winner"], opponent=r["opponent"], chance=r["chance"])
 
 
 def _game_row(g: Game) -> dict[str, Any]:
@@ -184,7 +190,8 @@ def _game_row(g: Game) -> dict[str, Any]:
                for e in g.entries]
     return {"id": g.id, "mode": g.mode.value, "status": g.status.value, "side": g.side.value if g.side else None,
             "entries": Jsonb(entries), "players": g.players, "server_seed": g.server_seed, "created_at": g.created_at,
-            "updated_at": g.updated_at, "closes_at": g.closes_at, "roll": g.roll, "winner": g.winner}
+            "updated_at": g.updated_at, "closes_at": g.closes_at, "roll": g.roll, "winner": g.winner,
+            "opponent": g.opponent, "chance": g.chance}
 
 
 class PostgresUnit:
@@ -315,16 +322,21 @@ class PostgresUnit:
         row = self.c.execute(q).fetchone()
         return _game(row) if row else None
 
-    def games(self, mode: Mode | None, status: GameStatus, player: str | None, limit: int) -> builtins.list[Game]:
+    def games(self, mode: Mode | None, status: GameStatus, player: str | None, limit: int,
+              since: datetime | None = None, before: datetime | None = None) -> builtins.list[Game]:
         cond = [sql.SQL("status = %(status)s")]
         if mode is not None:
             cond.append(sql.SQL("mode = %(mode)s"))
         if player is not None:
             cond.append(sql.SQL("players @> ARRAY[%(player)s]::text[]"))
+        if since is not None:
+            cond.append(sql.SQL("updated_at >= %(since)s"))
+        if before is not None:
+            cond.append(sql.SQL("updated_at < %(before)s"))
         q = SELECT_GAMES + sql.SQL(" WHERE ") + sql.SQL(" AND ").join(cond) + sql.SQL(
             " ORDER BY updated_at DESC, id DESC LIMIT %(n)s")
         rows = self.c.execute(q, {"status": status.value, "mode": mode.value if mode else None, "player": player,
-                                  "n": limit}).fetchall()
+                                  "since": since, "before": before, "n": limit}).fetchall()
         return [_game(r) for r in rows]
 
 

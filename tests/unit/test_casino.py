@@ -11,6 +11,8 @@ import pytest
 from balatro_items.domain import (
     JACKPOT_MAX_ITEMS,
     JACKPOT_MAX_PLAYERS,
+    MAX_CHANCE,
+    MIN_CHANCE,
     Edition,
     Entry,
     Game,
@@ -27,14 +29,19 @@ from balatro_items.domain import (
     Side,
     cancel,
     check_bet,
+    check_challenge,
+    check_chance,
     check_items,
     coinflip_range,
     draw,
-    join_coinflip,
+    join_duel,
     join_jackpot,
+    join_range,
     parts,
     pay_out,
     seed_hash,
+    tally,
+    winner_chance,
 )
 from balatro_items.domain.casino import roll, winner_of
 from tests.fakes import T0
@@ -106,15 +113,15 @@ def test_a_coinflip_is_matched_within_its_margin() -> None:
     assert coinflip_range(1) == (1, 1)
     g = game(Mode.COINFLIP, entry("alice", 100))
     with pytest.raises(NotParticipant):
-        join_coinflip(g, entry("alice", 100))
+        join_duel(g, entry("alice", 100))
     for value in (89, 111):
         with pytest.raises(InvalidBet):
-            join_coinflip(g, entry("bob", value))
-    join_coinflip(g, entry("bob", 110))
+            join_duel(g, entry("bob", value))
+    join_duel(g, entry("bob", 110))
     draw(g, T0)
     assert g.status is GameStatus.DONE and g.winner in ("alice", "bob") and g.roll is not None and 0 <= g.roll < 210
     with pytest.raises(GameClosed):
-        join_coinflip(g, entry("carol", 100))
+        join_duel(g, entry("carol", 100))
 
 
 def test_the_jackpot_counts_down_from_the_second_player() -> None:
@@ -169,3 +176,67 @@ def test_a_cancelled_game_gives_everything_back() -> None:
     g = game(Mode.JACKPOT, entry("alice", 10), entry("bob", 10))
     with pytest.raises(NotParticipant):
         cancel(g, "alice", T0)  # (someone else is in)
+
+
+def test_a_dice_game_is_matched_for_the_chance_asked() -> None:
+    assert join_range(100, 50) == (90, 110)  # (a coinflip)
+    assert join_range(100, 25) == (270, 330)  # three times as much, 10% more or less
+    assert join_range(100, 90) == (10, 12)
+    assert join_range(1000, 10) == (8100, 9900)
+    check_chance(MIN_CHANCE)
+    check_chance(MAX_CHANCE)
+    for bad in (MIN_CHANCE - 1, MAX_CHANCE + 1, 0, 100):
+        with pytest.raises(InvalidBet):
+            check_chance(bad)
+    g = game(Mode.DICE, entry("alice", 100))
+    g.chance = 25
+    with pytest.raises(InvalidBet):
+        join_duel(g, entry("bob", 110))  # (a coinflip's match is not enough)
+    join_duel(g, entry("bob", 300))
+    draw(g, T0)
+    assert parts(g.entries) == [(0, 100), (100, 400)]  # (the first part of the pot is the first player's)
+    assert g.winner == ("alice" if g.roll is not None and g.roll < 100 else "bob")
+
+
+def test_the_dice_keep_their_odds() -> None:
+    wins, n = 0, 20000
+    for i in range(n):
+        g = game(Mode.DICE, entry("a", 10), entry("b", 90), server_seed=f"dice-{i}")
+        draw(g, T0)
+        wins += g.winner == "a"
+    assert abs(wins / n - 0.10) < 0.01
+
+
+def test_a_challenge_is_for_one_player() -> None:
+    check_challenge("alice", None)
+    check_challenge("alice", "bob")
+    with pytest.raises(InvalidBet):
+        check_challenge("alice", "alice")
+    g = game(Mode.COINFLIP, entry("alice", 100))
+    g.opponent = "bob"
+    with pytest.raises(NotParticipant):
+        join_duel(g, entry("carol", 100))
+    join_duel(g, entry("bob", 100))
+    assert g.players == ["alice", "bob"]
+
+
+def test_the_tally_of_a_players_games() -> None:
+    def done(gid: str, mode: Mode, winner: str, *entries: Entry) -> Game:
+        g = game(mode, *entries)
+        g.id, g.status, g.winner, g.roll = gid, GameStatus.DONE, winner, 0
+        return g
+
+    games = [
+        done("g1", Mode.COINFLIP, "alice", entry("alice", 100), entry("bob", 100)),
+        done("g2", Mode.DICE, "alice", entry("alice", 10), entry("bob", 90)),
+        done("g3", Mode.JACKPOT, "bob", entry("alice", 50), entry("bob", 30), entry("alice", 20)),
+        game(Mode.COINFLIP, entry("alice", 999)),  # (open: doesn't count)
+    ]
+    t = tally(games)
+    alice, bob = t["alice"], t["bob"]
+    assert (alice.games, alice.wins, alice.staked, alice.won, alice.lost, alice.net) == (3, 2, 180, 190, 70, 120)
+    assert (bob.games, bob.wins, bob.staked, bob.won, bob.lost, bob.net) == (3, 1, 220, 70, 190, -120)
+    assert alice.by_mode == {Mode.COINFLIP: (1, 1), Mode.DICE: (1, 1), Mode.JACKPOT: (1, 0)}
+    assert alice.biggest is not None and alice.biggest.id == "g1"  # (the biggest pot: 200)
+    assert alice.luckiest is not None and alice.luckiest.id == "g2" and winner_chance(alice.luckiest) == 0.1
+    assert bob.luckiest is not None and bob.luckiest.id == "g3" and winner_chance(bob.luckiest) == 0.3

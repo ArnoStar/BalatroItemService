@@ -21,7 +21,7 @@ from balatro_items.domain import (
     Transfer,
 )
 
-from .dto import Player
+from .dto import CasinoEvent, Player
 
 
 class Unit(Protocol):
@@ -89,8 +89,10 @@ class Unit(Protocol):
         when there is none: this unit may open it)."""
         ...
 
-    def games(self, mode: Mode | None, status: GameStatus, player: str | None, limit: int) -> builtins.list[Game]:
-        """Games in this status (of this mode, with this player), the last changed first."""
+    def games(self, mode: Mode | None, status: GameStatus, player: str | None, limit: int,
+              since: datetime | None = None, before: datetime | None = None) -> builtins.list[Game]:
+        """Games in this status (of this mode, with this player, last changed from ``since`` and before
+        ``before``), the last changed first."""
         ...
 
 
@@ -132,4 +134,27 @@ class IdGenerator(Protocol):
 class SeedSource(Protocol):
     def seed(self) -> str:
         """A new secret nobody can guess (a casino game's server seed): 64 hex digits."""
+        ...
+
+
+class FeedSubscription(Protocol):
+    """One open live stream of the casino."""
+
+    async def next(self, timeout: float) -> CasinoEvent | None:
+        """The next event, or None when nothing came in ``timeout`` seconds. Raises EOFError once closed (a stream
+        that doesn't keep up is closed: its client opens another and reloads)."""
+        ...
+
+    def close(self) -> None: ...
+
+
+class CasinoFeed(Protocol):
+    """The casino's live streams, in this process (one process: the feed is in memory)."""
+
+    def publish(self, event: CasinoEvent) -> None:
+        """To every open stream (from any thread)."""
+        ...
+
+    def subscribe(self) -> FeedSubscription:
+        """A new stream (called on the event loop that will read it)."""
         ...
