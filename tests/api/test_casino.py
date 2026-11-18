@@ -26,8 +26,10 @@ def ready(w: World) -> None:
         find(w, who)
 
 
-def gift(w: World, to: str, key: str = "j_joker", edition: str = "base") -> str:
-    r = w.client.post("/v1/admin/gifts", headers=ADMIN, json={"to": to, "key": key, "edition": edition})
+def gift(w: World, to: str, key: str = "j_joker", edition: str = "base", condition: float = 0.5) -> str:
+    """An item (at the same condition: the same card is worth the same)."""
+    r = w.client.post("/v1/admin/gifts", headers=ADMIN,
+                      json={"to": to, "key": key, "edition": edition, "condition": condition})
     assert r.status_code == 201, r.text
     item_id: str = r.json()["id"]
     return item_id
@@ -69,7 +71,7 @@ def test_a_coinflip(world: World) -> None:
     r = c.post("/v1/casino/coinflips", headers=ALICE, json={"items": [a], "side": "mult", "seed": "alice-luck"})
     assert r.status_code == 201, r.text
     g = r.json()
-    value = item(world, a)["item"]["odds"]
+    value = item(world, a)["item"]["value"]
     assert g["status"] == "open" and g["side"] == "mult" and g["value"] == value and g["server_seed"] is None
     assert g["entries"][0]["player_name"] == "Alice" and g["entries"][0]["seed"] == "alice-luck"
     assert g["join_min"] <= value <= g["join_max"] and len(g["seed_hash"]) == 64
@@ -219,7 +221,7 @@ def test_a_dice_game(world: World) -> None:
     a = gift(world, "alice")
     b1, b2, b3 = (gift(world, "bob", k) for k in ("j_joker", "j_greedy_joker", "j_lusty_joker"))
     out_of_hold(world)
-    value = item(world, a)["item"]["odds"]
+    value = item(world, a)["item"]["value"]
     r = c.post("/v1/casino/dice", headers=ALICE, json={"items": [a], "chance": 4})
     assert r.status_code == 422 and r.json()["code"] == "invalid_request"
     r = c.post("/v1/casino/dice", headers=ALICE, json={"items": [a], "chance": 25, "seed": "long-shot"})

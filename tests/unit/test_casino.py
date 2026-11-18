@@ -53,7 +53,7 @@ WAIT = timedelta(seconds=60)
 def item(item_id: str, owner: str, staked: str | None = None) -> Item:
     return Item(id=item_id, kind=Kind.JOKER, key="j_joker", edition=Edition.BASE, rarity=Rarity.COMMON, stake=None,
                 serial=1, owner=owner, source="weekly", source_run=None, created_at=T0, acquired_at=T0,
-                tradable_at=T0, staked=staked)
+                tradable_at=T0, staked=staked, condition=0.3)
 
 
 def entry(player: str, value: int, *items: str, seed: str = "s") -> Entry:

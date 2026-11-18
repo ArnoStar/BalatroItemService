@@ -47,7 +47,8 @@ def player(pid: str, name: str) -> PlayerRecord:
 
 def item(iid: str, owner: str, key: str = "j_joker", edition: Edition = Edition.BASE, at=T0) -> Item:  # type: ignore[no-untyped-def]
     return Item(id=iid, kind=Kind.JOKER, key=key, edition=edition, rarity=Rarity.COMMON, stake=3, serial=0,
-                owner=owner, source="weekly", source_run="r1", created_at=at, acquired_at=at, tradable_at=at)
+                owner=owner, source="weekly", source_run="r1", created_at=at, acquired_at=at, tradable_at=at,
+                condition=0.25)
 
 
 def test_players(store) -> None:  # type: ignore[no-untyped-def]
@@ -284,11 +285,12 @@ def test_playing_cards_are_numbered_by_their_upgrades(store) -> None:  # type: i
     with store.unit() as u:
         it = u.item("i2")
         assert it is not None and (it.enhancement, it.seal, it.variant) == ("m_glass", "Red", "S_A+m_glass+Red")
+        assert it.condition == 0.25
 
 
 def test_packs(store) -> None:  # type: ignore[no-untyped-def]
     choices = [Choice(kind=Kind.CARD, key="S_A", rarity=Rarity.RARE, edition=Edition.FOIL, enhancement="m_gold",
-                      seal="Blue"),
+                      seal="Blue", condition=0.123456),
                Choice(kind=Kind.CARD, key="H_K", rarity=Rarity.COMMON, edition=Edition.BASE)]
     with store.unit() as u:
         u.add_pack(Pack(id="k1", owner="p1", booster="card_standard_normal", price=100, picks=1, choices=choices,
@@ -414,5 +416,8 @@ def test_migration_4_gives_the_tags_back_in_coins(pg) -> None:  # type: ignore[n
             assert t1 is not None and t1.status is TradeStatus.CANCELLED
             assert t2 is not None and t2.status is TradeStatus.PENDING
             assert u.claims("p1") == {"deck:b_red"}
+            # migration 5: every item of before has a condition, at random
+            conditions = [i.condition for p in ("p1", "p2", "p3") for i in u.items_of(p)]
+            assert conditions and all(0 <= c <= 1 for c in conditions)
     finally:
         store.close()

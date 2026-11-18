@@ -13,9 +13,10 @@ player's account.
 Playing earns **coins** (below: none can be farmed); coins buy **boosters**,
 packs of cards to choose from, and items other players sell on the
 **market**. Each item has a **rarity** (common, uncommon, rare, legendary), a
-**serial number** among the items of its card, upgrades and edition (#1 was
-the first made), and `odds`: how rare it is, one in N cards of its kind's
-standard table, which is also its **value in coins** (the casino's values).
+**condition** (how well kept its card is, below), a **value** in coins (its
+card, upgrades and condition, below), a **serial number** among the items of
+its card, upgrades and edition (#1 was the first made), and `odds`: how rare
+it is to find, one in N cards of its kind's standard table.
 Jokers found by winning before boosters carry the **stake** they were won at.
 
 - Players **trade** items (an offer of some items for some of another
@@ -99,6 +100,44 @@ coins, its value then (its odds on the standard table of that time, from 178
 coins for a common tag to 58,963 for a negative rare one), its open casino
 game called off and its pending offers cancelled (migration 4).
 
+## Condition
+
+Every item has a condition from 0 (ruined) to 1 (pristine), drawn when its
+card is shown (a booster's card is shown with it, before the player
+chooses): `P(condition >= x) = (1 - x^1.5)^5`. Most cards are worn (half
+are below 26%); a good one is rare, a really good one really rare, the best
+close to impossible:
+
+| condition | grade | one card in |
+|---|---|---|
+| 0-10% | ruined | |
+| 10-25% | battered | |
+| 25-45% | worn | 2 (25% or more) |
+| 45-60% | played | 6 |
+| 60-80% | fine | 23 |
+| 80-95% | excellent | 537 |
+| 95-99% | mint | 449,000 |
+| 99-100% | pristine | 1.3 billion |
+
+The front ends draw it: faded and yellowed colours, grime, scratches, frayed
+edges and, once badly worn, a crease (each item its own); a pristine card is
+spotless. The items made before conditions got one at random, drawn the same
+way (migration 5).
+
+## Value
+
+An item's **mint value** is what its card would be worth in perfect
+condition: its kind and rarity (a joker 150, 400, 1,500, 12,000 coins from
+common to legendary; a tarot, planet or spectral card 40, 100, 350, 6,000; a
+playing card 30, 100, 400), times its edition (foil x3, holographic x5,
+polychrome x10, negative x25; a negative tarot, planet or spectral card,
+rarer still, x60), a playing card's enhancement (Glass, Steel x1.35, Lucky
+x1.3, Gold x1.25, Wild x1.1, Stone x0.9) and seal (Red x1.4, Gold x1.3, Blue,
+Purple x1.15), and a joker's stake sticker (+4% a stake above White). Its
+**value** is its mint value times its condition, at least 1 coin
+(`domain/value.py`): what the casino stakes it at and the market shows next
+to a price.
+
 ## The market
 
 - `POST /v1/market {item, price}`: your item for sale, from 1 to
@@ -149,10 +188,9 @@ items, never how many there are.
   join it (`opponent`): a friend, or the player you just played. Everyone may
   still watch it, as every game.
 
-**Value and chance.** An item is worth its odds in coins: one in how many cards
-of its kind's standard table it is (`odds`, so a Negative legendary weighs far
-more than a common joker). Your chance is the value of your items over the
-value of the pot. The values are fixed when the items are staked.
+**Value and chance.** An item is worth its value (above: its card, upgrades
+and condition). Your chance is the value of your items over the value of
+the pot. The values are fixed when the items are staked.
 
 **The same rules as trades.** Only players with a counted win may play, only
 items out of their trade hold may be staked, and the items you win start
@@ -229,7 +267,7 @@ own paths. With sign-in on, every route but `/health`, `/v1/odds`, `/v1/boosters
 | `POST /v1/trades` | make an offer |
 | `GET /v1/trades/{id}` | one of your trades (`available`: it can still be accepted) |
 | `POST /v1/trades/{id}/accept`, `/decline`, `/cancel` | answer an offer made to you, or cancel yours |
-| `POST /v1/admin/gifts` | `{to, key, edition, stake, enhancement, seal}`: give an item (the admin role, or `BALATRO_ITEMS_ADMINS`) |
+| `POST /v1/admin/gifts` | `{to, key, edition, stake, enhancement, seal, condition}`: give an item (the admin role, or `BALATRO_ITEMS_ADMINS`) |
 | `POST /v1/admin/coins` | `{to, coins, note}`: give coins (negative: take them back, down to 0) |
 | `GET /v1/casino/rules` | is the casino open, its limits, the dice's chances, the jackpot's countdown |
 | `GET /v1/casino/live` | the casino, live (server-sent events: `hello`, then `game`) |
@@ -263,7 +301,8 @@ An item, as every answer has it:
 
 ```
 {id, kind: joker|tarot|planet|spectral|card, key: "j_blueprint" | "c_fool" | "S_A", name: "Blueprint", edition,
- rarity: 1-4, enhancement: "m_glass"|null, seal: "Red"|null, variant: "S_A+m_glass+Red", stake: 1-8|null, serial,
+ rarity: 1-4, enhancement: "m_glass"|null, seal: "Red"|null, variant: "S_A+m_glass+Red", stake: 1-8|null,
+ condition: 0-1, grade: "worn", mint_value, value, serial,
  minted, odds, owner, owner_name, source: booster|gift|..., source_run, booster, found_at, acquired_at, tradable_at,
  tradable, staked: <game id>|null, listed: <listing id>|null, price: <coins>|null,
  sprite: {atlas, pos: {x, y}, soul_pos, overlay, front, seal}}
@@ -318,7 +357,7 @@ Clean architecture, as BalatroWebAPI (`AGENTS.md`):
 ```
 src/balatro_items/
   domain/           Item, Trade and their rules; drops.py: the grants (coins); boosters.py: the boosters, tables,
-                    rolls, odds, packs; market.py: listings, sales; casino.py: the coinflip, the dice,
+                    rolls, odds, packs; condition.py; value.py; market.py: listings, sales; casino.py: the coinflip, the dice,
                     the jackpot, challenges, the draw, the tallies
   application/      use cases, DTOs, ports (the store's Unit, the game API, the clock, ids)
   infrastructure/   auth (the identity service's tokens), game_api (runs, catalog), persistence (PostgreSQL, memory),

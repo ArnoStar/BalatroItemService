@@ -25,7 +25,9 @@ screen, the profile), it never plays it.
    better table or a shorter trade hold changes the value of every item already
    made. Change them only on purpose, say so in the README ("Coins",
    "Boosters"), and keep `GET /v1/odds` true. An item only has the upgrades the
-   game can give its kind of card (`EDITIONS`, `ENHANCEMENTS`, `SEALS`).
+   game can give its kind of card (`EDITIONS`, `ENHANCEMENTS`, `SEALS`). The
+   same goes for the condition's distribution (`domain/condition.py`) and the
+   value system (`domain/value.py`): say so in the README.
 3. **All or nothing.** Every change happens in one store transaction (`Unit`):
    a trade moves all its items or none, a grant is claimed with its coins, a
    pack is paid with its cards, a sale moves the coins and the item together.

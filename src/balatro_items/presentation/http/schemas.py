@@ -47,10 +47,12 @@ class GiftRequest(BaseModel):
     stake: int | None = Field(None, ge=1, le=8, description="A stake sticker (1 White ... 8 Gold)")
     enhancement: str | None = Field(None, pattern=f"^({'|'.join(ENHANCEMENTS)})$", description="A playing card's")
     seal: str | None = Field(None, pattern=f"^({'|'.join(SEALS)})$", description="A playing card's")
+    condition: float | None = Field(None, ge=0, le=1, description="0 (ruined) to 1 (pristine); none: drawn as a "
+                                                                  "booster's card's")
 
     def to_dto(self) -> Gift:
         return Gift(to=self.to, key=self.key, edition=self.edition, stake=self.stake, enhancement=self.enhancement,
-                    seal=self.seal)
+                    seal=self.seal, condition=self.condition)
 
 
 class CoinGiftRequest(BaseModel):

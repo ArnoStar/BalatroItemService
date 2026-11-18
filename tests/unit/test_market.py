@@ -31,7 +31,7 @@ HOLD = timedelta(days=7)
 def item(owner: str = "alice", listed: str | None = "l1") -> Item:
     return Item(id="i1", kind=Kind.CARD, key="S_A", edition=Edition.FOIL, rarity=Rarity.RARE, stake=None, serial=1,
                 owner=owner, source="booster", source_run=None, created_at=T0, acquired_at=T0, tradable_at=T0,
-                enhancement="m_glass", seal="Red", listed=listed)
+                enhancement="m_glass", seal="Red", listed=listed, condition=0.4)
 
 
 def listing() -> Listing:

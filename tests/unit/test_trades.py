@@ -31,7 +31,7 @@ HOLD = timedelta(days=7)
 def item(item_id: str, owner: str, tradable_at=T0) -> Item:  # type: ignore[no-untyped-def]
     return Item(id=item_id, kind=Kind.JOKER, key="j_joker", edition=Edition.BASE, rarity=Rarity.COMMON, stake=None,
                 serial=1, owner=owner, source="weekly", source_run=None, created_at=T0, acquired_at=T0,
-                tradable_at=tradable_at)
+                tradable_at=tradable_at, condition=0.3)
 
 
 def trade(give: tuple[str, ...] = ("a1",), take: tuple[str, ...] = ("b1",)) -> Trade:

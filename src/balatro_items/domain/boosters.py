@@ -16,7 +16,8 @@ same rarity is drawn).
 Each card is rolled on its table: the rarity (``RARITIES``: the game's joker
 rarities; other cards have theirs from items.py), the card among those of its
 kind and rarity, all equally likely, then the edition (``EDITIONS``: only those
-the game gives that kind of card). ``Pools.odds`` says how rare a card and
+the game gives that kind of card) and its condition (condition.py, the same
+for every booster: shown with the card, before the player chooses). ``Pools.odds`` says how rare a card and
 edition are on its kind's standard table (one in N cards), which is what makes
 an item more valuable than another (its value in coins, in the casino too).
 """
@@ -29,6 +30,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
+from .condition import roll_condition
 from .errors import InvalidPick, PackOpened
 from .items import CONSUMABLES, Edition, Kind, Rarity, Template
 
@@ -214,6 +216,7 @@ class Choice:
     edition: Edition
     enhancement: str | None = None
     seal: str | None = None
+    condition: float | None = None  # (None: a pack bought before conditions, its card gets one when chosen)
 
 
 def roll_pack(booster: Booster, pools: Pools, rng: Random) -> list[Choice]:
@@ -223,7 +226,7 @@ def roll_pack(booster: Booster, pools: Pools, rng: Random) -> list[Choice]:
         template, edition = pools.roll(booster.table, rng, shown)
         shown.append(template.variant)
         out.append(Choice(kind=template.kind, key=template.key, rarity=template.rarity, edition=edition,
-                          enhancement=template.enhancement, seal=template.seal))
+                          enhancement=template.enhancement, seal=template.seal, condition=roll_condition(rng)))
     return out
 
 

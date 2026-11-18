@@ -46,7 +46,7 @@ class ItemView:
     stake: int | None  # the stake of the win it came from (the game's stake sticker); None: not from a win
     serial: int  # its number among the items of its variant and edition (#1: the first made)
     minted: int  # how many items of its variant and edition have been made so far
-    odds: int  # one in this many cards of its kind's standard table is this one: higher is rarer (its value)
+    odds: int  # one in this many cards of its kind's standard table is this one: how rare it is to find
     owner: str
     owner_name: str | None
     source: str  # booster, gift (before boosters: weekly, weekly_win, first_deck_win, first_stake_win)
@@ -65,6 +65,10 @@ class ItemView:
     listed: str | None = None  # its open listing on the market
     price: int | None = None  # its price there, in coins
     booster: str | None = None  # the booster it came from
+    condition: float = 0.0  # how well kept its card is: 0 (ruined) to 1 (pristine)
+    grade: str = ""  # its condition's name: ruined, battered, worn, played, fine, excellent, mint, pristine
+    mint_value: int = 0  # coins: what it would be worth in perfect condition (its card, edition, upgrades)
+    value: int = 0  # coins: its mint value times its condition (what the casino stakes it at)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -212,6 +216,7 @@ class Gift:
     stake: int | None = None
     enhancement: str | None = None  # a playing card's
     seal: str | None = None
+    condition: float | None = None  # None: drawn as a booster's card's
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -253,6 +258,10 @@ class ChoiceView:
     odds: int  # as an item's
     minted: int  # how many items of it there are already
     sprite: dict[str, Any] | None = None
+    condition: float | None = None  # (None: a pack of before conditions: its card gets one when chosen)
+    grade: str | None = None
+    mint_value: int = 0
+    value: int = 0  # its value as an item (with its condition)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -323,7 +332,7 @@ class EntryView:
     player: str
     player_name: str | None
     items: list[ItemView]
-    value: int  # the items' value (their odds) when they were staked
+    value: int  # the items' value when they were staked
     chance: float  # percent of the pot
     low: int  # its part of the pot: from low (included) to high (excluded); the roll in it wins
     high: int

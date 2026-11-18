@@ -120,6 +120,11 @@ def test_boosters_make_items_from_the_cards_chosen(world: World) -> None:
          pack["choices"][k]["edition"]) for k in (2, 0)]
     assert all(i["source"] == "booster" and i["booster"] == "card_boosted_mega" and i["serial"] == 1
                and not i["tradable"] and i["sprite"] for i in items)
+    # each card's condition was shown with it, and its value follows it
+    for i, k in zip(items, (2, 0), strict=True):
+        assert i["condition"] == pack["choices"][k]["condition"] and 0 <= i["condition"] <= 1
+        assert i["value"] == pack["choices"][k]["value"] == max(1, round(i["mint_value"] * i["condition"]))
+        assert i["grade"] == pack["choices"][k]["grade"]
     r = c.post(f"/v1/packs/{pack['id']}/choose", headers=ALICE, json={"picks": [1, 3]})
     assert r.status_code == 409 and r.json()["code"] == "pack_opened"
     assert c.get("/v1/me/packs", headers=ALICE).json() == []
@@ -252,6 +257,10 @@ def test_admins_give_items_and_coins(world: World) -> None:
     r = c.post("/v1/admin/gifts", headers=ADMIN, json=card)
     assert r.status_code == 201, r.text
     assert (r.json()["variant"], r.json()["rarity"], r.json()["name"]) == ("S_A+m_glass+Red", 3, "Ace of Spades")
+    assert 0 <= r.json()["condition"] <= 1  # (drawn, as a booster's card's)
+    r = c.post("/v1/admin/gifts", headers=ADMIN, json={**card, "condition": 0.5})
+    expected = (0.5, "played", round(400 * 10 * 1.35 * 1.4 / 2))
+    assert (r.json()["condition"], r.json()["grade"], r.json()["value"]) == expected
     # only the upgrades the game gives: no negative playing card, no holographic tarot
     r = c.post("/v1/admin/gifts", headers=ADMIN, json={**card, "edition": "negative"})
     assert r.status_code == 422 and r.json()["code"] == "unknown_item"
