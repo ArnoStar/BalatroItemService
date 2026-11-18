@@ -56,11 +56,11 @@ def test_sign_in_is_needed_but_for_health_odds_and_boosters(world: World) -> Non
     assert odds["pools"]["card"] == {"common": 4, "uncommon": 48, "rare": 128}
     assert odds["trade_hold_days"] == 7 and odds["market_min_price"] == 1
     planets = next(t for t in odds["tables"] if t["kind"] == "planet" and t["tier"] == "standard")
-    assert "legendary" not in planets["rarities"] and planets["editions"] == {"base": 99.9, "negative": 0.1}
+    assert "legendary" not in planets["rarities"] and planets["editions"] == {"base": 99.98, "negative": 0.02}
     boosters = c.get("/v1/boosters").json()
     mega = next(b for b in boosters if b["id"] == "spectral_premium_mega")
     assert (mega["choices"], mega["picks"], mega["price"], mega["art"]) == (4, 2, 1200, "p_spectral_mega_1")
-    assert mega["rarities"] == {"uncommon": 40.0, "rare": 50.0, "legendary": 10.0}
+    assert mega["rarities"] == {"uncommon": 75.0, "rare": 23.5, "legendary": 1.5}
 
 
 def test_coins_are_earned_by_playing_once(world: World) -> None:

@@ -54,22 +54,23 @@ def test_each_kind_gets_only_the_editions_the_game_gives_it() -> None:
     for kind in (Kind.TAROT, Kind.PLANET, Kind.SPECTRAL):
         assert EDITIONS[kind] == {Edition.BASE, Edition.NEGATIVE}
         for tier in Tier:  # negative: really rarely
-            assert table(kind, tier).editions[Edition.NEGATIVE] <= 1
+            assert table(kind, tier).editions[Edition.NEGATIVE] <= 0.3
 
 
 def test_rolls_follow_the_table() -> None:
     p, r = pools(), rng(7)
-    rolls = [p.roll(table(Kind.JOKER), r) for _ in range(20000)]
+    rolls = [p.roll(table(Kind.JOKER), r) for _ in range(100000)]
     assert all(t.kind is Kind.JOKER for t, _ in rolls)
     rarities = Counter(t.rarity for t, _ in rolls)
     assert rarities[Rarity.COMMON] > rarities[Rarity.UNCOMMON] > rarities[Rarity.RARE] > rarities[Rarity.LEGENDARY] > 0
-    assert 0.68 < rarities[Rarity.COMMON] / len(rolls) < 0.72
+    assert 0.865 < rarities[Rarity.COMMON] / len(rolls) < 0.895
     editions = Counter(e for _, e in rolls)
     assert editions[Edition.BASE] > editions[Edition.FOIL] > editions[Edition.HOLOGRAPHIC] > editions[
         Edition.POLYCHROME] > editions[Edition.NEGATIVE] > 0
-    # premium: never common, never base
+    # premium: never common, an edition about half the time
     premium = [p.roll(table(Kind.JOKER, Tier.PREMIUM), r) for _ in range(2000)]
-    assert all(t.rarity >= Rarity.UNCOMMON and e is not Edition.BASE for t, e in premium)
+    assert all(t.rarity >= Rarity.UNCOMMON for t, _ in premium)
+    assert 0.5 < sum(1 for _, e in premium if e is not Edition.BASE) / len(premium) < 0.6
 
 
 def test_playing_cards_have_their_upgrades() -> None:
@@ -89,11 +90,11 @@ def test_playing_cards_have_their_upgrades() -> None:
 
 def test_consumables_rarely_negative_and_the_soul_legendary() -> None:
     p, r = pools(), rng(5)
-    rolls = [p.roll(table(Kind.SPECTRAL, Tier.PREMIUM), r) for _ in range(20000)]
+    rolls = [p.roll(table(Kind.SPECTRAL, Tier.PREMIUM), r) for _ in range(40000)]
     souls = sum(1 for t, _ in rolls if t.key == "c_soul")
-    assert 0.08 < souls / len(rolls) < 0.12  # legendary: 10% of the premium table
+    assert 0.012 < souls / len(rolls) < 0.018  # legendary: 1.5% of the premium table
     negatives = sum(1 for _, e in rolls if e is Edition.NEGATIVE)
-    assert 0.005 < negatives / len(rolls) < 0.015
+    assert 0.0018 < negatives / len(rolls) < 0.0042  # 0.3%
     assert all(t.rarity is not Rarity.COMMON for t, _ in rolls)
 
 
@@ -101,13 +102,13 @@ def test_odds_say_what_is_rarer() -> None:
     p = pools()
     common, legendary = p.by_variant["j_joker"], p.by_variant["j_caino"]
     assert p.odds(common, Edition.BASE) < p.odds(common, Edition.NEGATIVE) < p.odds(legendary, Edition.NEGATIVE)
-    # 70% common, 4 commons here, 85% base: 1 in 1 / (0.7 / 4 * 0.85)
-    assert p.odds(common, Edition.BASE) == round(1 / (0.7 / 4 * 0.85))
+    # 88% common, 4 commons here, 96% base: 1 in 1 / (0.88 / 4 * 0.96)
+    assert p.odds(common, Edition.BASE) == round(1 / (0.88 / 4 * 0.96))
     assert p.odds(common, Edition.BASE, table(Kind.JOKER, Tier.PREMIUM)) == 0  # can't be rolled there
     assert p.odds(p.by_variant["c_fool"], Edition.BASE, table(Kind.JOKER)) == 0  # another kind's table
     # a planet has no legendary: the others share its part
     eris = p.by_variant["c_eris"]
-    assert p.odds(eris, Edition.BASE) == round(1 / (4.5 / 99.5 * 0.999))
+    assert p.odds(eris, Edition.BASE) == round(1 / (1.4 / 99.9 * 0.9998))
     assert p.odds(eris, Edition.HOLOGRAPHIC) == 0
     assert p.odds(p.by_variant["S_A+m_glass+Red"], Edition.POLYCHROME) > p.odds(p.by_variant["S_A"], Edition.FOIL)
 

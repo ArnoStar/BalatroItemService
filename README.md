@@ -77,10 +77,13 @@ same card twice. Each card is rolled on its kind's table for the tier
 
 | | standard | boosted | premium |
 |---|---|---|---|
-| rarity | common 70%, uncommon 25%, rare 4.5%, legendary 0.5% | 50 / 35 / 13 / 2% | uncommon 40%, rare 50%, legendary 10% |
-| joker edition | base 85%, foil 8%, holographic 4.5%, polychrome 2%, negative 0.5% | 70 / 14 / 9 / 5 / 2% | foil 40%, holo 30%, poly 20%, negative 10% |
-| tarot, planet, spectral | negative 0.1% | 0.3% | 1% |
-| playing card edition | base 92%, foil 4%, holographic 2.8%, polychrome 1.2% (the game's Standard Pack) | 76 / 12 / 8 / 4% | foil 50%, holo 33%, poly 17% |
+| rarity | common 88%, uncommon 10.5%, rare 1.4%, legendary 0.1% | 75 / 20 / 4.5 / 0.5% | uncommon 75%, rare 23.5%, legendary 1.5% |
+| joker edition | base 96%, foil 2.8%, holographic 1%, polychrome 0.18%, negative 0.02% | 88 / 7.5 / 3.5 / 0.85 / 0.15% | 45 / 35 / 15 / 4.5 / 0.5% |
+| tarot, planet, spectral | negative 0.02% | 0.08% | 0.3% |
+| playing card edition | base 97%, foil 2.2%, holographic 0.7%, polychrome 0.1% | 90 / 6.5 / 2.8 / 0.7% | 50 / 33 / 13.5 / 3.5% |
+
+(Since 2026-11-19: every chance of a better card was cut, by about three to
+twenty times; a premium booster no longer promises an edition.)
 
 then one card of that kind and rarity, all equally likely (a kind without a
 rarity shares its part among the others). Rarities: jokers have the game's;

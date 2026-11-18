@@ -45,30 +45,32 @@ class Size(StrEnum):
     MEGA = "mega"
 
 
+# (drastically rarer since 2026-11-19: a good card is an event)
 RARITIES: dict[Tier, dict[Rarity, float]] = {
-    Tier.STANDARD: {Rarity.COMMON: 70, Rarity.UNCOMMON: 25, Rarity.RARE: 4.5, Rarity.LEGENDARY: 0.5},
-    Tier.BOOSTED: {Rarity.COMMON: 50, Rarity.UNCOMMON: 35, Rarity.RARE: 13, Rarity.LEGENDARY: 2},
-    Tier.PREMIUM: {Rarity.UNCOMMON: 40, Rarity.RARE: 50, Rarity.LEGENDARY: 10},
+    Tier.STANDARD: {Rarity.COMMON: 88, Rarity.UNCOMMON: 10.5, Rarity.RARE: 1.4, Rarity.LEGENDARY: 0.1},
+    Tier.BOOSTED: {Rarity.COMMON: 75, Rarity.UNCOMMON: 20, Rarity.RARE: 4.5, Rarity.LEGENDARY: 0.5},
+    Tier.PREMIUM: {Rarity.UNCOMMON: 75, Rarity.RARE: 23.5, Rarity.LEGENDARY: 1.5},
 }
 
 _JOKER_EDITIONS: dict[Tier, dict[Edition, float]] = {
-    Tier.STANDARD: {Edition.BASE: 85, Edition.FOIL: 8, Edition.HOLOGRAPHIC: 4.5, Edition.POLYCHROME: 2,
-                    Edition.NEGATIVE: 0.5},
-    Tier.BOOSTED: {Edition.BASE: 70, Edition.FOIL: 14, Edition.HOLOGRAPHIC: 9, Edition.POLYCHROME: 5,
-                   Edition.NEGATIVE: 2},
-    Tier.PREMIUM: {Edition.FOIL: 40, Edition.HOLOGRAPHIC: 30, Edition.POLYCHROME: 20, Edition.NEGATIVE: 10},
+    Tier.STANDARD: {Edition.BASE: 96, Edition.FOIL: 2.8, Edition.HOLOGRAPHIC: 1, Edition.POLYCHROME: 0.18,
+                    Edition.NEGATIVE: 0.02},
+    Tier.BOOSTED: {Edition.BASE: 88, Edition.FOIL: 7.5, Edition.HOLOGRAPHIC: 3.5, Edition.POLYCHROME: 0.85,
+                   Edition.NEGATIVE: 0.15},
+    Tier.PREMIUM: {Edition.BASE: 45, Edition.FOIL: 35, Edition.HOLOGRAPHIC: 15, Edition.POLYCHROME: 4.5,
+                   Edition.NEGATIVE: 0.5},
 }
 # tarot, planet and spectral cards: negative really rarely, as in the game
 _CONSUMABLE_EDITIONS: dict[Tier, dict[Edition, float]] = {
-    Tier.STANDARD: {Edition.BASE: 99.9, Edition.NEGATIVE: 0.1},
-    Tier.BOOSTED: {Edition.BASE: 99.7, Edition.NEGATIVE: 0.3},
-    Tier.PREMIUM: {Edition.BASE: 99, Edition.NEGATIVE: 1},
+    Tier.STANDARD: {Edition.BASE: 99.98, Edition.NEGATIVE: 0.02},
+    Tier.BOOSTED: {Edition.BASE: 99.92, Edition.NEGATIVE: 0.08},
+    Tier.PREMIUM: {Edition.BASE: 99.7, Edition.NEGATIVE: 0.3},
 }
-# playing cards: the standard tier is the game's Standard Pack (poll_edition at twice the rate, never negative)
+# playing cards: never negative
 _CARD_EDITIONS: dict[Tier, dict[Edition, float]] = {
-    Tier.STANDARD: {Edition.BASE: 92, Edition.FOIL: 4, Edition.HOLOGRAPHIC: 2.8, Edition.POLYCHROME: 1.2},
-    Tier.BOOSTED: {Edition.BASE: 76, Edition.FOIL: 12, Edition.HOLOGRAPHIC: 8, Edition.POLYCHROME: 4},
-    Tier.PREMIUM: {Edition.FOIL: 50, Edition.HOLOGRAPHIC: 33, Edition.POLYCHROME: 17},
+    Tier.STANDARD: {Edition.BASE: 97, Edition.FOIL: 2.2, Edition.HOLOGRAPHIC: 0.7, Edition.POLYCHROME: 0.1},
+    Tier.BOOSTED: {Edition.BASE: 90, Edition.FOIL: 6.5, Edition.HOLOGRAPHIC: 2.8, Edition.POLYCHROME: 0.7},
+    Tier.PREMIUM: {Edition.BASE: 50, Edition.FOIL: 33, Edition.HOLOGRAPHIC: 13.5, Edition.POLYCHROME: 3.5},
 }
 
 
