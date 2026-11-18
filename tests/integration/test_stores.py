@@ -6,15 +6,22 @@ from datetime import timedelta
 
 import pytest
 
+from balatro_items.application.dto import ListingQuery
 from balatro_items.domain import (
     OFFER_LIFETIME,
+    Choice,
     Edition,
     Entry,
     Game,
     GameStatus,
     Item,
     Kind,
+    Listing,
+    ListingStatus,
     Mode,
+    NotEnoughCoins,
+    Pack,
+    PackStatus,
     PlayerRecord,
     Rarity,
     Side,
@@ -87,9 +94,9 @@ def test_items_serials_and_history(store) -> None:  # type: ignore[no-untyped-de
 
 def test_claims_are_once(store) -> None:  # type: ignore[no-untyped-def]
     with store.unit() as u:
-        assert u.claim("p1", "deck:b_red", "i1", "r1", T0)
-        assert not u.claim("p1", "deck:b_red", "i2", "r2", T0)
-        assert u.claim("p2", "deck:b_red", "i3", "r3", T0)
+        assert u.claim("p1", "deck:b_red", "r1", T0, 250)
+        assert not u.claim("p1", "deck:b_red", "r2", T0, 250)
+        assert u.claim("p2", "deck:b_red", "r3", T0, 250)
     with store.unit() as u:
         assert u.claims("p1") == {"deck:b_red"} and u.claims("nobody") == set()
 
@@ -131,12 +138,19 @@ def test_the_whole_service_on_postgres(pg) -> None:  # type: ignore[no-untyped-d
     alice = {"Authorization": f"Bearer {token(sub='alice', name='Alice')}"}
     w.runs.add("alice", "r1", won=True, ante=8, stake=3, at=w.clock.now())
     w.clock.advance(seconds=10)
-    found = w.client.post("/v1/me/drops", headers=alice).json()["found"]
-    assert sorted(i["source"] for i in found) == ["first_deck_win", "first_stake_win", "first_stake_win", "weekly",
-                                                   "weekly_win"]
+    earned = w.client.post("/v1/me/drops", headers=alice).json()["earned"]
+    assert sorted(e["reason"] for e in earned) == ["first_deck_win", "first_stake_win", "first_stake_win", "weekly",
+                                                    "weekly_win"]
     w.clock.advance(seconds=10)
-    assert w.client.post("/v1/me/drops", headers=alice).json()["found"] == []
-    assert len(w.client.get("/v1/me/items", headers=alice).json()) == 5
+    assert w.client.post("/v1/me/drops", headers=alice).json()["earned"] == []
+    assert w.client.get("/v1/me", headers=alice).json()["coins"] == 1100
+    for booster in ("card_boosted_mega", "spectral_standard_jumbo", "joker_standard_normal"):
+        pack = w.client.post(f"/v1/boosters/{booster}/buy", headers=alice).json()
+        r = w.client.post(f"/v1/packs/{pack['id']}/choose", headers=alice, json={"picks": list(range(pack["picks"]))})
+        assert r.status_code == 200, r.text
+    items = w.client.get("/v1/me/items", headers=alice).json()
+    assert len(items) == 4 and {i["kind"] for i in items} == {"card", "spectral", "joker"}
+    assert w.client.get("/v1/me", headers=alice).json()["coins"] == 1100 - 500 - 90 - 100
 
 
 def test_staked_items_and_games_won(store) -> None:  # type: ignore[no-untyped-def]
@@ -230,3 +244,175 @@ def test_the_casino_on_postgres(pg) -> None:  # type: ignore[no-untyped-def]
     assert c.get("/v1/casino/leaderboard?period=day", headers=BOB).json()["games"] == 2
     check_draw(last)
     assert [g["id"] for g in c.get("/v1/casino/games?player=alice", headers=BOB).json()] == [pot["id"], done["id"]]
+
+
+def test_coins_and_their_history(store) -> None:  # type: ignore[no-untyped-def]
+    with store.unit() as u:
+        u.save_player(player("p1", "Alice"))
+        assert u.add_coins("p1", 250, "weekly_win", "week:2026-W46:win", T0) == 250
+        assert u.add_coins("p1", -100, "booster", "pack1", T0 + timedelta(minutes=1)) == 150
+    with pytest.raises(NotEnoughCoins), store.unit() as u:
+        u.add_coins("p1", -151, "booster", "pack2", T0)
+    with store.unit() as u:
+        p = u.player("p1")
+        assert p is not None and p.coins == 150
+        p.name = "Alicia"
+        u.save_player(p)  # (saving a player never changes their coins)
+        p.coins = 9999
+        u.save_player(p)
+        assert [(m.amount, m.balance, m.reason, m.ref) for m in u.coin_moves("p1", 10)] == [
+            (-100, 150, "booster", "pack1"), (250, 250, "weekly_win", "week:2026-W46:win")]
+    with store.unit() as u:
+        p = u.player("p1")
+        assert p is not None and p.coins == 150 and p.name == "Alicia"
+
+
+def test_playing_cards_are_numbered_by_their_upgrades(store) -> None:  # type: ignore[no-untyped-def]
+    def card(iid: str, enhancement: str | None, seal: str | None) -> Item:
+        it = item(iid, "p1", key="S_A")
+        it.kind, it.enhancement, it.seal = Kind.CARD, enhancement, seal
+        return it
+
+    with store.unit() as u:
+        u.save_player(player("p1", "Alice"))
+        serials = [u.add_item(card(f"i{n}", e, s)).serial
+                   for n, (e, s) in enumerate([(None, None), ("m_glass", None), ("m_glass", "Red"), (None, None),
+                                               ("m_glass", "Red")])]
+        assert serials == [1, 1, 1, 2, 2]
+        assert u.minted("S_A", Edition.BASE) == 2 and u.minted("S_A+m_glass+Red", Edition.BASE) == 2
+        assert u.minted("S_A+m_glass", Edition.BASE) == 1
+    with store.unit() as u:
+        it = u.item("i2")
+        assert it is not None and (it.enhancement, it.seal, it.variant) == ("m_glass", "Red", "S_A+m_glass+Red")
+
+
+def test_packs(store) -> None:  # type: ignore[no-untyped-def]
+    choices = [Choice(kind=Kind.CARD, key="S_A", rarity=Rarity.RARE, edition=Edition.FOIL, enhancement="m_gold",
+                      seal="Blue"),
+               Choice(kind=Kind.CARD, key="H_K", rarity=Rarity.COMMON, edition=Edition.BASE)]
+    with store.unit() as u:
+        u.add_pack(Pack(id="k1", owner="p1", booster="card_standard_normal", price=100, picks=1, choices=choices,
+                        status=PackStatus.OPEN, created_at=T0))
+        u.add_pack(Pack(id="k2", owner="p1", booster="joker_standard_normal", price=100, picks=1, choices=[],
+                        status=PackStatus.OPEN, created_at=T0 + timedelta(minutes=1)))
+    with store.unit() as u:
+        k = u.pack("k1", lock=True)
+        assert k is not None and k.choices == choices and k.status is PackStatus.OPEN and k.opened_at is None
+        k.status, k.chosen, k.items, k.opened_at = PackStatus.OPENED, (0,), ("i9",), T0
+        u.save_pack(k)
+        assert u.pack("nope") is None
+    with store.unit() as u:
+        k = u.pack("k1")
+        assert k is not None and (k.status, k.chosen, k.items, k.opened_at) == (PackStatus.OPENED, (0,), ("i9",), T0)
+        assert [x.id for x in u.packs_of("p1", PackStatus.OPEN, 10)] == ["k2"]
+        assert [x.id for x in u.packs_of("p1", None, 10)] == ["k2", "k1"] and u.packs_of("p2", None, 10) == []
+
+
+def test_listings(store) -> None:  # type: ignore[no-untyped-def]
+    def listing(lid: str, seller: str, iid: str, price: int, minutes: int) -> Listing:
+        at = T0 + timedelta(minutes=minutes)
+        return Listing(id=lid, seller=seller, item=iid, price=price, status=ListingStatus.OPEN, created_at=at,
+                       updated_at=at)
+
+    with store.unit() as u:
+        u.save_player(player("p1", "Alice"))
+        u.save_player(player("p2", "Bob"))
+        u.add_item(item("i1", "p1"))
+        u.add_item(item("i2", "p1", key="j_blueprint", edition=Edition.NEGATIVE))
+        card = item("i3", "p2", key="S_A")
+        card.kind, card.enhancement, card.rarity = Kind.CARD, "m_glass", Rarity.UNCOMMON
+        u.add_item(card)
+        u.add_listing(listing("l1", "p1", "i1", 50, 0))
+        u.add_listing(listing("l2", "p1", "i2", 900, 1))
+        u.add_listing(listing("l3", "p2", "i3", 300, 2))
+    with store.unit() as u:
+        def ids(**kw: object) -> list[str]:
+            return [x.id for x in u.listings(ListingQuery(**kw))]  # type: ignore[arg-type]
+
+        assert ids() == ["l3", "l2", "l1"]
+        assert ids(sort="price") == ["l1", "l3", "l2"] and ids(sort="-price") == ["l2", "l3", "l1"]
+        assert ids(sort="price", limit=1, offset=1) == ["l3"]
+        assert ids(kind=Kind.CARD) == ["l3"] and ids(edition=Edition.NEGATIVE) == ["l2"]
+        assert ids(rarity=Rarity.UNCOMMON) == ["l3"] and ids(keys=("j_joker", "S_A")) == ["l3", "l1"]
+        assert ids(variant="S_A+m_glass") == ["l3"] and ids(variant="S_A") == []
+        assert ids(seller="p1") == ["l2", "l1"] and u.open_listings_of("p1") == 2
+        x = u.listing("l1", lock=True)
+        assert x is not None and x.price == 50 and x.buyer is None
+        x.status, x.buyer, x.updated_at = ListingStatus.SOLD, "p2", T0 + timedelta(hours=1)
+        u.save_listing(x)
+    with store.unit() as u:
+        assert [x.id for x in u.listings(ListingQuery(status=ListingStatus.SOLD, buyer="p2"))] == ["l1"]
+        assert [x.id for x in u.listings(ListingQuery(status=None, player="p2"))] == ["l1", "l3"]
+        assert u.open_listings_of("p1") == 1
+        u.add_listing(listing("l4", "p1", "i1", 70, 5))  # (sold: it may be listed again)
+
+
+def test_migration_4_gives_the_tags_back_in_coins(pg) -> None:  # type: ignore[no-untyped-def]
+    """A database of the tags' time (migrations 1 to 3): every tag leaves, its owner gets its value in coins, its open
+    game is called off and its pending offers cancelled."""
+    import psycopg
+    from psycopg import sql as pgsql
+
+    from balatro_items.infrastructure.persistence import postgres
+    from tests.conftest import PG_URL
+
+    store = pg()  # (the test's schema, migrated: start again from migration 3)
+    with store._pool.connection() as conn:
+        search_path = conn.execute("SHOW search_path").fetchone()["search_path"]  # type: ignore[index]
+    store.close()
+    with psycopg.connect(PG_URL, autocommit=True) as conn:  # type: ignore[arg-type]
+        conn.execute(pgsql.SQL("SET search_path TO {}").format(pgsql.SQL(search_path)))
+        for table in ("schema_migrations", "players", "serials", "items", "transfers", "claims", "trades", "games",
+                      "coin_moves", "packs", "listings"):
+            conn.execute(pgsql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(pgsql.Identifier(table)))
+        conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL "
+                     "DEFAULT now())")
+        for version, script in enumerate(postgres.MIGRATIONS[:3], 1):
+            conn.execute(script.encode())
+            conn.execute("INSERT INTO schema_migrations (version) VALUES (%s)", (version,))
+        conn.execute(
+            "INSERT INTO players (id, name, has_won, showcase, created_at) VALUES "
+            "('p1', 'Alice', true, 't1', %(t)s), ('p2', 'Bob', true, null, %(t)s), ('p3', 'Cy', false, null, %(t)s)",
+            {"t": T0})
+        rows = [("t1", "tag", "tag_negative", "negative", 3, "p1"), ("t2", "tag", "tag_economy", "base", 1, "p1"),
+                ("t3", "tag", "tag_foil", "foil", 2, "p2"), ("j1", "joker", "j_joker", "base", 1, "p2"),
+                ("j2", "joker", "j_mime", "foil", 2, "p1"), ("j3", "joker", "j_dna", "base", 3, "p3")]
+        for n, (iid, kind, key, edition, rarity, owner) in enumerate(rows):
+            conn.execute("INSERT INTO items (id, kind, key, edition, rarity, serial, owner, source, created_at, "
+                         "acquired_at, tradable_at) VALUES (%s, %s, %s, %s, %s, %s, %s, 'weekly', %s, %s, %s)",
+                         (iid, kind, key, edition, rarity, n + 1, owner, T0, T0, T0))
+            conn.execute("INSERT INTO transfers (item, from_owner, to_owner, at) VALUES (%s, null, %s, %s)",
+                         (iid, owner, T0))
+        # a coinflip with Bob's tag and Alice's joker, open; another of jokers only, open
+        conn.execute("INSERT INTO games (id, mode, status, entries, players, server_seed, created_at, updated_at) "
+                     "VALUES ('g1', 'coinflip', 'open', '[]', '{p2,p1}', 's', %(t)s, %(t)s), "
+                     "('g2', 'coinflip', 'open', '[]', '{p3}', 's', %(t)s, %(t)s)", {"t": T0})
+        conn.execute("UPDATE items SET staked = 'g1' WHERE id IN ('t3', 'j2')")
+        conn.execute("UPDATE items SET staked = 'g2' WHERE id = 'j3'")
+        conn.execute("INSERT INTO trades (id, sender, recipient, give, take, message, status, created_at, updated_at, "
+                     "expires_at) VALUES ('tr1', 'p1', 'p2', '{t2}', '{j1}', '', 'pending', %(t)s, %(t)s, %(t)s), "
+                     "('tr2', 'p2', 'p3', '{j1}', '{}', '', 'pending', %(t)s, %(t)s, %(t)s)", {"t": T0})
+        conn.execute("INSERT INTO claims (owner, source, item, run, at) VALUES ('p1', 'deck:b_red', 't1', 'r1', %s)",
+                     (T0,))
+    store = postgres.PostgresStore(PG_URL, schema=search_path.strip('"'))  # type: ignore[arg-type]
+    try:
+        with store.unit() as u:
+            assert [i.id for i in u.items_of("p1")] == ["j2"] and [i.id for i in u.items_of("p2")] == ["j1"]
+            assert u.item("t1") is None and u.transfers("t1") == []
+            alice, bob, cy = u.player("p1"), u.player("p2"), u.player("p3")
+            assert alice is not None and bob is not None and cy is not None
+            assert (alice.coins, bob.coins, cy.coins) == (58963 + 178, 1990, 0)
+            assert alice.showcase is None
+            assert sorted((m.amount, m.ref) for m in u.coin_moves("p1", 10)) == [
+                (178, "tag_economy:base"), (58963, "tag_negative:negative")]
+            assert u.coin_moves("p1", 10)[0].balance == 58963 + 178 and u.coin_moves("p2", 10)[0].reason == "tag_refund"
+            g1, g2 = u.game("g1"), u.game("g2")
+            assert g1 is not None and g1.status is GameStatus.CANCELLED
+            assert g2 is not None and g2.status is GameStatus.OPEN
+            assert u.item("j2").staked is None and u.item("j3").staked == "g2"  # type: ignore[union-attr]
+            t1, t2 = u.trade("tr1"), u.trade("tr2")
+            assert t1 is not None and t1.status is TradeStatus.CANCELLED
+            assert t2 is not None and t2.status is TradeStatus.PENDING
+            assert u.claims("p1") == {"deck:b_red"}
+    finally:
+        store.close()

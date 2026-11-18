@@ -1,9 +1,11 @@
 """The use cases: one class each, taking the caller (``Player``) first.
 
-Items are only found through ``SyncDrops`` (the game API's runs earn them,
-domain/drops.py) and an admin's gift, and only change hands through an
-accepted trade or a casino game (domain/casino.py). Every change happens in
-one store transaction (``Unit``)."""
+Coins are only earned through ``SyncDrops`` (the game API's runs earn them,
+domain/drops.py) and an admin's gift; items are only made by ``ChoosePack``
+(a booster bought with coins, domain/boosters.py) and an admin's gift. Items
+only change hands through an accepted trade, a casino game (domain/casino.py)
+or the market (domain/market.py), and coins only through the market. Every
+change happens in one store transaction (``Unit``)."""
 
 from __future__ import annotations
 
@@ -13,36 +15,58 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from balatro_items.domain import (
+    BOOSTERS,
     COINFLIP_MARGIN,
     DUELS,
+    EDITIONS,
+    GOLD_COINS,
     JACKPOT_MAX_ITEMS,
     JACKPOT_MAX_PLAYERS,
     MAX_CHANCE,
+    MAX_LISTINGS,
     MAX_OPEN_COINFLIPS,
     MAX_PENDING,
+    MAX_PRICE,
     MAX_STAKE,
     MIN_CHANCE,
+    MIN_PRICE,
     OFFER_LIFETIME,
     TABLES,
+    WEEKLY_COINS,
+    WIN_COINS,
+    Booster,
+    BoosterNotFound,
+    Choice,
     DomainError,
+    Edition,
     Entry,
     Game,
     GameNotFound,
     GameStatus,
     InvalidBet,
+    InvalidListing,
     Item,
     ItemNotFound,
+    Kind,
+    Listing,
+    ListingNotFound,
+    ListingStatus,
     Mode,
     NotOwner,
     NotParticipant,
+    Pack,
+    PackNotFound,
+    PackStatus,
     PlayerNotFound,
     PlayerRecord,
+    Pools,
     Random,
     Rarity,
     Side,
     Tally,
     Template,
     TooManyGames,
+    TooManyListings,
     TooManyOffers,
     Trade,
     TradeNotFound,
@@ -56,29 +80,38 @@ from balatro_items.domain import (
     check_items,
     check_join,
     check_offer,
+    check_price,
+    choose,
     draw,
     earned,
     join_duel,
     join_jackpot,
     join_range,
     next_week,
-    odds,
     parts,
     pay_out,
-    pools,
-    roll,
+    roll_pack,
+    sell,
     swap,
+    take_off,
     tally,
+    variant,
     week_of,
     winner_chance,
 )
 
 from .dto import (
+    BoosterView,
     CasinoEvent,
     CasinoRulesView,
     CasinoSnapshotView,
     CasinoStatsView,
+    ChoiceView,
+    CoinGift,
+    CoinMoveView,
+    CoinsView,
     DropsView,
+    EarnedView,
     EntryView,
     GameView,
     Gift,
@@ -86,11 +119,15 @@ from .dto import (
     ItemView,
     JackpotView,
     LeaderboardView,
+    ListingQuery,
+    ListingView,
     MeView,
     ModeStatsView,
     NewBet,
+    NewListing,
     NewTrade,
     OddsView,
+    PackView,
     Player,
     PlayerView,
     RankView,
@@ -118,6 +155,7 @@ from .ports import (
 log = logging.getLogger(__name__)
 
 SYNC_EVERY = timedelta(seconds=5)  # a player's runs are read at most this often
+MAX_OPEN_PACKS = 1000  # (counted up to this many)
 ADMIN_ROLES = frozenset({"admin"})
 
 
@@ -164,36 +202,64 @@ def ensure_player(u: Unit, player: Player, now: datetime) -> PlayerRecord:
     return rec
 
 
+_POOLS: dict[int, tuple[list[Template], Pools]] = {}
+
+
+def pools_of(templates: list[Template]) -> Pools:
+    """The catalog's pools, made once per copy of the catalog (the game API's adapter keeps one for a while)."""
+    hit = _POOLS.get(id(templates))
+    if hit is not None and hit[0] is templates:
+        return hit[1]
+    pools = Pools(templates)
+    _POOLS.clear()
+    _POOLS[id(templates)] = (templates, pools)
+    return pools
+
+
+def percent(weights: dict[str, float]) -> dict[str, float]:
+    total = sum(weights.values())
+    return {k: round(100 * v / total, 3) for k, v in weights.items()} if total else {}
+
+
 class Views:
-    """Items and trades as the clients see them (names and sprites from the catalog)."""
+    """Items, packs, listings and trades as the clients see them (names and sprites from the catalog)."""
 
     def __init__(self, deps: Deps) -> None:
         self.deps = deps
 
-    def templates(self) -> list[Template]:
+    def pools(self, strict: bool = False) -> Pools:
+        """The catalog's cards (``strict``: raise GameApiUnavailable without them; else none, until it is back)."""
         try:
-            return self.deps.catalog.templates()
+            return pools_of(self.deps.catalog.templates())
         except GameApiUnavailable:
-            return []  # (shown by key, without odds, until the catalog is back)
+            if strict:
+                raise
+            return pools_of([])  # (items are shown by key, without odds, until the catalog is back)
+
+    def names(self, u: Unit, ids: Sequence[str | None]) -> dict[str, str | None]:
+        out: dict[str, str | None] = {}
+        for pid in ids:
+            if pid is not None and pid not in out:
+                rec = u.player(pid)
+                out[pid] = rec.name if rec else None
+        return out
 
     def items(self, u: Unit, items: Sequence[Item]) -> list[ItemView]:
-        templates = self.templates()
-        by_key = {t.key: t for t in templates}
-        names: dict[str, str | None] = {}
+        pools = self.pools()
+        names = self.names(u, [it.owner for it in items])
         now = self.deps.clock.now()
         out = []
         for it in items:
-            if it.owner not in names:
-                rec = u.player(it.owner)
-                names[it.owner] = rec.name if rec else None
-            t = by_key.get(it.key)
+            t = pools.by_variant.get(it.variant)
+            listing = u.listing(it.listed) if it.listed else None
             out.append(ItemView(
                 id=it.id, kind=it.kind, key=it.key, name=t.name if t else it.key, edition=it.edition, rarity=it.rarity,
-                stake=it.stake, serial=it.serial, minted=u.minted(it.key, it.edition),
-                odds=odds(t, it.edition, templates) if t else 0, owner=it.owner, owner_name=names[it.owner],
+                stake=it.stake, serial=it.serial, minted=u.minted(it.variant, it.edition),
+                odds=pools.odds(t, it.edition) if t else 0, owner=it.owner, owner_name=names[it.owner],
                 source=it.source, source_run=it.source_run, found_at=it.created_at, acquired_at=it.acquired_at,
                 tradable_at=it.tradable_at, tradable=it.tradable(now), staked=it.staked,
-                sprite=t.sprite if t else None))
+                sprite=t.sprite if t else None, enhancement=it.enhancement, seal=it.seal, variant=it.variant,
+                listed=it.listed, price=listing.price if listing else None, booster=it.booster))
         return out
 
     def item(self, u: Unit, item: Item) -> ItemView:
@@ -207,8 +273,51 @@ class Views:
         now = self.deps.clock.now()
         week = week_of(now)
         claims = u.claims(player_id)
-        return WeekView(week=week, weekly_found=f"week:{week}:play" in claims,
-                        weekly_win_found=f"week:{week}:win" in claims, next_week_at=next_week(now))
+        return WeekView(week=week, weekly_earned=f"week:{week}:play" in claims,
+                        weekly_win_earned=f"week:{week}:win" in claims, weekly_coins=WEEKLY_COINS,
+                        weekly_win_coins=WIN_COINS, next_week_at=next_week(now))
+
+    def booster(self, b: Booster, pools: Pools) -> BoosterView:
+        chances = pools.chances(b.table) or {r: w for r, w in b.table.rarities.items() if w > 0}
+        return BoosterView(id=b.id, kind=b.kind, tier=b.tier, size=b.size, choices=b.choices, picks=b.picks,
+                           price=b.price, art=b.art,
+                           rarities=percent({Rarity(r).name.lower(): w for r, w in chances.items()}),
+                           editions=percent({e.value: w for e, w in b.table.editions.items() if w > 0}))
+
+    def choice(self, u: Unit, index: int, c: Choice, pools: Pools) -> ChoiceView:
+        v = variant(c.key, c.enhancement, c.seal)
+        t = pools.by_variant.get(v)
+        return ChoiceView(index=index, kind=c.kind, key=c.key, name=t.name if t else c.key, rarity=c.rarity,
+                          edition=c.edition, enhancement=c.enhancement, seal=c.seal, variant=v,
+                          odds=pools.odds(t, c.edition) if t else 0, minted=u.minted(v, c.edition),
+                          sprite=t.sprite if t else None)
+
+    def pack(self, u: Unit, p: Pack) -> PackView:
+        pools = self.pools()
+        items = u.items(p.items)
+        return PackView(
+            id=p.id, booster=self.booster(BOOSTERS[p.booster], pools), price=p.price, picks=p.picks, status=p.status,
+            choices=[self.choice(u, i, c, pools) for i, c in enumerate(p.choices)], chosen=list(p.chosen),
+            items=self.items(u, [items[i] for i in p.items if i in items]), created_at=p.created_at,
+            opened_at=p.opened_at)
+
+    def listings(self, u: Unit, listings: Sequence[Listing]) -> list[ListingView]:
+        items = u.items([x.item for x in listings])
+        views = {v.id: v for v in self.items(u, list(items.values()))}
+        names = self.names(u, [p for x in listings for p in (x.seller, x.buyer)])
+        out = []
+        for x in listings:
+            it = items.get(x.item)
+            available = (x.status is ListingStatus.OPEN and it is not None and it.owner == x.seller
+                         and it.listed == x.id)
+            out.append(ListingView(id=x.id, seller=x.seller, seller_name=names[x.seller], item=views.get(x.item),
+                                   price=x.price, status=x.status, available=available, buyer=x.buyer,
+                                   buyer_name=names[x.buyer] if x.buyer else None, created_at=x.created_at,
+                                   updated_at=x.updated_at))
+        return out
+
+    def listing(self, u: Unit, x: Listing) -> ListingView:
+        return self.listings(u, [x])[0]
 
     def trade(self, u: Unit, t: Trade) -> TradeView:
         now = self.deps.clock.now()
@@ -232,6 +341,15 @@ class Views:
             expires_at=t.expires_at)
 
 
+def unshow(u: Unit, players: Sequence[str], items: dict[str, Item]) -> None:
+    """An item shown by its former owner isn't theirs to show any more: their title screen gets the game's card."""
+    for pid in players:
+        rec = u.player(pid, lock=True)
+        if rec is not None and rec.showcase in items and items[rec.showcase].owner != pid:
+            rec.showcase = None
+            u.save_player(rec)
+
+
 class Authenticate:
     def __init__(self, authenticator: Authenticator) -> None:
         self.authenticator = authenticator
@@ -248,12 +366,13 @@ class GetMe:
         with self.deps.store.unit() as u:
             rec = ensure_player(u, player, self.deps.clock.now())
             return MeView(id=rec.id, name=rec.name, can_trade=rec.has_won, admin=is_admin(self.deps, player),
-                          items=len(u.items_of(rec.id)), showcase=self.views.showcase(u, rec),
-                          week=self.views.week(u, rec.id))
+                          items=len(u.items_of(rec.id)), coins=rec.coins,
+                          packs=len(u.packs_of(rec.id, PackStatus.OPEN, MAX_OPEN_PACKS)),
+                          showcase=self.views.showcase(u, rec), week=self.views.week(u, rec.id))
 
 
 class SyncDrops:
-    """Reads the player's runs from the game API and gives the items they have earned
+    """Reads the player's runs from the game API and gives the coins they have earned
     (domain/drops.py): each grant once, ever."""
 
     def __init__(self, deps: Deps) -> None:
@@ -265,27 +384,23 @@ class SyncDrops:
         with d.store.unit() as u:
             rec = ensure_player(u, player, now)
             recent = rec.synced_at is not None and now - rec.synced_at < SYNC_EVERY
-        if recent:
-            with d.store.unit() as u:
-                return DropsView(found=[], week=self.views.week(u, player.id))
+            if recent:
+                return DropsView(earned=[], coins=0, balance=rec.coins, week=self.views.week(u, player.id))
         runs = d.runs.runs(player)  # (outside the transaction: the game API may be slow)
-        templates = d.catalog.templates()
-        found: list[Item] = []
+        got: list[EarnedView] = []
         with d.store.unit() as u:
             rec = u.player(player.id, lock=True) or ensure_player(u, player, now)
             rec.has_won = rec.has_won or any(r.won and r.counted for r in runs)
             rec.synced_at = now
             u.save_player(rec)
+            balance = rec.coins
             for grant in earned(runs, u.claims(player.id), now):
-                template, edition = roll(grant.table, templates, d.rng)
-                item = Item(id=d.ids.new_id(), kind=template.kind, key=template.key, edition=edition,
-                            rarity=template.rarity, stake=grant.stake, serial=0, owner=player.id, source=grant.reason,
-                            source_run=grant.run, created_at=now, acquired_at=now, tradable_at=now + d.hold)
-                if u.claim(player.id, grant.source, item.id, grant.run, now):
-                    found.append(u.add_item(item))
-                    u.add_transfer(Transfer(item=item.id, from_owner=None, to_owner=player.id, at=now))
-                    log.info("player %s found %s (%s) for %s", player.id, item.key, item.edition, grant.source)
-            return DropsView(found=self.views.items(u, found), week=self.views.week(u, player.id))
+                if u.claim(player.id, grant.source, grant.run, now, grant.coins):
+                    balance = u.add_coins(player.id, grant.coins, grant.reason, grant.source, now)
+                    got.append(EarnedView(source=grant.source, reason=grant.reason, coins=grant.coins, run=grant.run))
+                    log.info("player %s earned %d coins for %s", player.id, grant.coins, grant.source)
+            return DropsView(earned=got, coins=sum(g.coins for g in got), balance=balance,
+                             week=self.views.week(u, player.id))
 
 
 class MyItems:
@@ -356,7 +471,8 @@ class GetItem:
                 return names[pid]
 
             history = [TransferView(from_player=t.from_owner, from_name=name(t.from_owner), to_player=t.to_owner,
-                                    to_name=name(t.to_owner), at=t.at, trade=t.trade, game=t.game)
+                                    to_name=name(t.to_owner), at=t.at, trade=t.trade, game=t.game,
+                                    listing=t.listing, price=t.price)
                        for t in u.transfers(item_id)]
             return ItemDetail(item=self.views.item(u, item), history=history)
 
@@ -459,12 +575,7 @@ class AcceptTrade(_Respond):
             for item, before in swap(t, items, now, self.deps.hold):
                 u.save_item(item)
                 u.add_transfer(Transfer(item=item.id, from_owner=before, to_owner=item.owner, at=now, trade=t.id))
-            # (an item shown by its former owner isn't theirs to show any more)
-            for pid in (t.sender, t.recipient):
-                rec = u.player(pid, lock=True)
-                if rec is not None and rec.showcase in items and items[rec.showcase].owner != pid:
-                    rec.showcase = None
-                    u.save_player(rec)
+            unshow(u, (t.sender, t.recipient), items)
 
         return self._respond(player, trade_id, accept)
 
@@ -490,37 +601,36 @@ class CancelTrade(_Respond):
 
 
 RULES = [
-    RuleView(source="weekly", table="standard",
+    RuleView(source="weekly", coins=WEEKLY_COINS,
              description="Each week (from Monday, UTC): the first counted run that ends at ante 3 or later, or wins"),
-    RuleView(source="weekly_win", table="boosted", description="Each week: the first counted win"),
-    RuleView(source="first_deck_win", table="boosted", description="The first counted win with each deck"),
-    RuleView(source="first_stake_win", table="boosted",
-             description="The first counted win at each stake from Red to Black (Gold: the premium table)"),
+    RuleView(source="weekly_win", coins=WIN_COINS, description="Each week: the first counted win"),
+    RuleView(source="first_deck_win", coins=WIN_COINS, description="The first counted win with each deck"),
+    RuleView(source="first_stake_win", coins=WIN_COINS,
+             description=f"The first counted win at each stake from Red to Black (Gold: {GOLD_COINS} coins)"),
 ]
 
 
 class GetOdds:
     def __init__(self, deps: Deps) -> None:
-        self.deps = deps
+        self.deps, self.views = deps, Views(deps)
 
     def __call__(self) -> OddsView:
-        def pct(w: dict[str, float]) -> dict[str, float]:
-            total = sum(w.values())
-            return {k: round(100 * v / total, 3) for k, v in w.items()}
-
-        by_kind = pools(Views(self.deps).templates())
+        pools = self.views.pools()
+        tables = []
+        for t in TABLES.values():
+            chances = pools.chances(t) or {r: w for r, w in t.rarities.items() if w > 0}
+            tables.append(TableView(kind=t.kind, tier=t.tier,
+                                    rarities=percent({Rarity(r).name.lower(): w for r, w in chances.items()}),
+                                    editions=percent({e.value: w for e, w in t.editions.items() if w > 0})))
         return OddsView(
-            rules=RULES,
-            tables=[TableView(name=t.name, kinds=pct({k.value: v for k, v in t.kinds.items()}),
-                              rarities=pct({Rarity(r).name.lower(): v for r, v in t.rarities.items()}),
-                              editions=pct({e.value: v for e, v in t.editions.items()})) for t in TABLES],
-            pools={k.value: {Rarity(r).name.lower(): len(p) for r, p in sorted(rs.items())}
-                   for k, rs in by_kind.items()},
-            trade_hold_days=self.deps.hold.total_seconds() / 86400, offer_days=OFFER_LIFETIME.days)
+            rules=RULES, boosters=[self.views.booster(b, pools) for b in BOOSTERS.values()], tables=tables,
+            pools={k.value: {Rarity(r).name.lower(): n for r, n in rs.items()} for k, rs in pools.counts().items()},
+            trade_hold_days=self.deps.hold.total_seconds() / 86400, offer_days=OFFER_LIFETIME.days,
+            market_min_price=MIN_PRICE, market_max_price=MAX_PRICE, market_max_listings=MAX_LISTINGS)
 
 
 class GiveItem:
-    """An admin's gift (events, prizes): the only way to make an item outside the drops."""
+    """An admin's gift (events, prizes): the only way to make an item outside the boosters."""
 
     def __init__(self, deps: Deps) -> None:
         self.deps, self.views = deps, Views(deps)
@@ -529,9 +639,11 @@ class GiveItem:
         d = self.deps
         if not is_admin(d, admin):
             raise NotAdmin("only admins give items")
-        template = next((t for t in d.catalog.templates() if t.key == gift.key), None)
+        template = self.views.pools(strict=True).by_variant.get(variant(gift.key, gift.enhancement, gift.seal))
         if template is None:
-            raise UnknownTemplate(f"no joker or tag {gift.key!r}")
+            raise UnknownTemplate(f"no card {variant(gift.key, gift.enhancement, gift.seal)!r}")
+        if gift.edition not in EDITIONS[template.kind]:
+            raise UnknownTemplate(f"the game makes no {gift.edition.value} {template.kind.value} card")
         now = d.clock.now()
         with d.store.unit() as u:
             if u.player(gift.to) is None:
@@ -539,10 +651,293 @@ class GiveItem:
             item = u.add_item(Item(
                 id=d.ids.new_id(), kind=template.kind, key=template.key, edition=gift.edition, rarity=template.rarity,
                 stake=gift.stake, serial=0, owner=gift.to, source="gift", source_run=None, created_at=now,
-                acquired_at=now, tradable_at=now + d.hold))
+                acquired_at=now, tradable_at=now + d.hold, enhancement=template.enhancement, seal=template.seal))
             u.add_transfer(Transfer(item=item.id, from_owner=None, to_owner=gift.to, at=now))
-            log.info("admin %s gave %s (%s) to %s", admin.id, item.key, item.edition, gift.to)
+            log.info("admin %s gave %s (%s) to %s", admin.id, item.variant, item.edition, gift.to)
             return self.views.item(u, item)
+
+
+MAX_GIFT = 10_000_000
+
+
+class GiveCoins:
+    """An admin's gift of coins (events, prizes; negative: takes them back, down to 0): the only way to make
+    coins outside the grants."""
+
+    def __init__(self, deps: Deps) -> None:
+        self.deps = deps
+
+    def __call__(self, admin: Player, gift: CoinGift) -> CoinMoveView:
+        d = self.deps
+        if not is_admin(d, admin):
+            raise NotAdmin("only admins give coins")
+        if gift.coins == 0 or abs(gift.coins) > MAX_GIFT:
+            raise InvalidListing(f"a gift is from 1 to {MAX_GIFT:,} coins (or as many taken back)")
+        now = d.clock.now()
+        with d.store.unit() as u:
+            if u.player(gift.to) is None:
+                raise PlayerNotFound(gift.to)
+            balance = u.add_coins(gift.to, gift.coins, "gift", gift.note.strip()[:200] or None, now)
+            log.info("admin %s gave %d coins to %s", admin.id, gift.coins, gift.to)
+            return CoinMoveView(amount=gift.coins, balance=balance, reason="gift", ref=gift.note.strip()[:200] or None,
+                                at=now)
+
+
+class MyCoins:
+    def __init__(self, deps: Deps) -> None:
+        self.deps = deps
+
+    def __call__(self, player: Player, limit: int = 100) -> CoinsView:
+        with self.deps.store.unit() as u:
+            rec = ensure_player(u, player, self.deps.clock.now())
+            return CoinsView(balance=rec.coins, moves=[
+                CoinMoveView(amount=m.amount, balance=m.balance, reason=m.reason, ref=m.ref, at=m.at)
+                for m in u.coin_moves(player.id, limit)])
+
+
+class ListBoosters:
+    """What coins buy (public)."""
+
+    def __init__(self, deps: Deps) -> None:
+        self.views = Views(deps)
+
+    def __call__(self) -> list[BoosterView]:
+        pools = self.views.pools()
+        return [self.views.booster(b, pools) for b in BOOSTERS.values()]
+
+
+class BuyBooster:
+    """Coins for a pack: its cards are rolled at once (and kept until the player chooses)."""
+
+    def __init__(self, deps: Deps) -> None:
+        self.deps, self.views = deps, Views(deps)
+
+    def __call__(self, player: Player, booster_id: str) -> PackView:
+        d = self.deps
+        booster = BOOSTERS.get(booster_id)
+        if booster is None:
+            raise BoosterNotFound(booster_id)
+        pools = self.views.pools(strict=True)  # (outside the transaction: the game API may be slow)
+        if not pools.by_kind.get(booster.kind):
+            raise GameApiUnavailable("the game's cards can't be read now, try again")
+        now = d.clock.now()
+        with d.store.unit() as u:
+            ensure_player(u, player, now)
+            pack = Pack(id=d.ids.new_id(), owner=player.id, booster=booster.id, price=booster.price,
+                        picks=booster.picks, choices=roll_pack(booster, pools, d.rng), status=PackStatus.OPEN,
+                        created_at=now)
+            u.add_coins(player.id, -booster.price, "booster", pack.id, now)
+            u.add_pack(pack)
+            log.info("player %s bought %s (%s)", player.id, booster.id, pack.id)
+            return self.views.pack(u, pack)
+
+
+def own_pack(u: Unit, player: Player, pack_id: str, lock: bool = False) -> Pack:
+    """A pack of the caller's; another's is PackNotFound (don't say it exists)."""
+    p = u.pack(pack_id, lock=lock)
+    if p is None or p.owner != player.id:
+        raise PackNotFound(pack_id)
+    return p
+
+
+class MyPacks:
+    def __init__(self, deps: Deps) -> None:
+        self.deps, self.views = deps, Views(deps)
+
+    def __call__(self, player: Player, status: PackStatus | None = PackStatus.OPEN, limit: int = 50) -> list[PackView]:
+        with self.deps.store.unit() as u:
+            return [self.views.pack(u, p) for p in u.packs_of(player.id, status, limit)]
+
+
+class GetPack:
+    def __init__(self, deps: Deps) -> None:
+        self.deps, self.views = deps, Views(deps)
+
+    def __call__(self, player: Player, pack_id: str) -> PackView:
+        with self.deps.store.unit() as u:
+            return self.views.pack(u, own_pack(u, player, pack_id))
+
+
+class ChoosePack:
+    """The player's choice: the cards chosen become their items (numbered then), the others are gone."""
+
+    def __init__(self, deps: Deps) -> None:
+        self.deps, self.views = deps, Views(deps)
+
+    def __call__(self, player: Player, pack_id: str, picks: Sequence[int]) -> PackView:
+        d = self.deps
+        now = d.clock.now()
+        with d.store.unit() as u:
+            pack = own_pack(u, player, pack_id, lock=True)
+            made: list[str] = []
+            for c in choose(pack, picks, now):
+                item = u.add_item(Item(
+                    id=d.ids.new_id(), kind=c.kind, key=c.key, edition=c.edition, rarity=c.rarity, stake=None,
+                    serial=0, owner=player.id, source="booster", source_run=None, created_at=now, acquired_at=now,
+                    tradable_at=now + d.hold, enhancement=c.enhancement, seal=c.seal, booster=pack.booster))
+                u.add_transfer(Transfer(item=item.id, from_owner=None, to_owner=player.id, at=now))
+                made.append(item.id)
+                log.info("player %s chose %s (%s) from %s", player.id, item.variant, item.edition, pack.booster)
+            pack.items = tuple(made)
+            u.save_pack(pack)
+            return self.views.pack(u, pack)
+
+
+SORTS = ("newest", "price", "-price")
+
+
+class SearchMarket:
+    """The items for sale (public, as inventories are): by kind, rarity, edition, a name (the game's English one or
+    the key), the cheapest or newest first."""
+
+    def __init__(self, deps: Deps) -> None:
+        self.deps, self.views = deps, Views(deps)
+
+    def __call__(self, viewer: Player, *, kind: Kind | None = None, rarity: Rarity | None = None,
+                 edition: Edition | None = None, q: str = "", seller: str | None = None, sort: str = "newest",
+                 limit: int = 50, offset: int = 0) -> list[ListingView]:
+        if sort not in SORTS:
+            raise InvalidListing(f"sort is one of {', '.join(SORTS)}")
+        keys: tuple[str, ...] | None = None
+        if q.strip():
+            needle = q.strip().casefold()
+            keys = tuple(sorted({t.key for t in self.views.pools().by_variant.values()
+                                 if needle in t.name.casefold() or needle == t.key.casefold()}))
+            if not keys:
+                return []
+        query = ListingQuery(status=ListingStatus.OPEN, kind=kind, rarity=rarity, edition=edition, keys=keys,
+                             seller=seller, sort=sort, limit=limit, offset=offset)
+        with self.deps.store.unit() as u:
+            return self.views.listings(u, u.listings(query))
+
+
+class MarketSales:
+    """The last sales (of one variant and edition: what such an item sells for)."""
+
+    def __init__(self, deps: Deps) -> None:
+        self.deps, self.views = deps, Views(deps)
+
+    def __call__(self, viewer: Player, *, variant_: str | None = None, edition: Edition | None = None,
+                 kind: Kind | None = None, limit: int = 20) -> list[ListingView]:
+        query = ListingQuery(status=ListingStatus.SOLD, variant=variant_, edition=edition, kind=kind, limit=limit)
+        with self.deps.store.unit() as u:
+            return self.views.listings(u, u.listings(query))
+
+
+class MyListings:
+    """``box``: selling (your items for sale), sold, bought, or all (everything you sold, bought or took off)."""
+
+    BOXES = ("selling", "sold", "bought", "all")
+
+    def __init__(self, deps: Deps) -> None:
+        self.deps, self.views = deps, Views(deps)
+
+    def __call__(self, player: Player, box: str = "selling", limit: int = 100, offset: int = 0) -> list[ListingView]:
+        if box not in self.BOXES:
+            raise InvalidListing(f"box is one of {', '.join(self.BOXES)}")
+        query = {
+            "selling": ListingQuery(status=ListingStatus.OPEN, seller=player.id, limit=limit, offset=offset),
+            "sold": ListingQuery(status=ListingStatus.SOLD, seller=player.id, limit=limit, offset=offset),
+            "bought": ListingQuery(status=ListingStatus.SOLD, buyer=player.id, limit=limit, offset=offset),
+            "all": ListingQuery(status=None, player=player.id, limit=limit, offset=offset),
+        }[box]
+        with self.deps.store.unit() as u:
+            return self.views.listings(u, u.listings(query))
+
+
+class GetListing:
+    def __init__(self, deps: Deps) -> None:
+        self.deps, self.views = deps, Views(deps)
+
+    def __call__(self, viewer: Player, listing_id: str) -> ListingView:
+        with self.deps.store.unit() as u:
+            x = u.listing(listing_id)
+            if x is None:
+                raise ListingNotFound(listing_id)
+            return self.views.listing(u, x)
+
+
+class CreateListing:
+    """An item for sale, at the seller's price: it can't change hands any other way until it is sold or taken off."""
+
+    def __init__(self, deps: Deps) -> None:
+        self.deps, self.views = deps, Views(deps)
+
+    def __call__(self, player: Player, offer: NewListing) -> ListingView:
+        d = self.deps
+        check_price(offer.price)
+        now = d.clock.now()
+        with d.store.unit() as u:
+            me = ensure_player(u, player, now)
+            if not me.has_won:
+                raise TradingLocked("the market opens after your first win (a counted run)")
+            if u.open_listings_of(me.id) >= MAX_LISTINGS:
+                raise TooManyListings(f"at most {MAX_LISTINGS} items on the market at once: take one off first")
+            items = u.items([offer.item], lock=True)
+            check_items(me.id, [offer.item], items, now, moved=False)
+            item = items[offer.item]
+            listing = Listing(id=d.ids.new_id(), seller=me.id, item=item.id, price=offer.price,
+                              status=ListingStatus.OPEN, created_at=now, updated_at=now)
+            item.listed = listing.id
+            u.add_listing(listing)
+            u.save_item(item)
+            return self.views.listing(u, listing)
+
+
+class CancelListing:
+    """The seller takes their item off the market."""
+
+    def __init__(self, deps: Deps) -> None:
+        self.deps, self.views = deps, Views(deps)
+
+    def __call__(self, player: Player, listing_id: str) -> ListingView:
+        now = self.deps.clock.now()
+        with self.deps.store.unit() as u:
+            x = u.listing(listing_id, lock=True)
+            if x is None:
+                raise ListingNotFound(listing_id)
+            item = u.items([x.item], lock=True).get(x.item)
+            take_off(x, item, player.id, now)
+            if item is not None:
+                u.save_item(item)
+            u.save_listing(x)
+            return self.views.listing(u, x)
+
+
+class BuyListing:
+    """The buyer's coins to the seller, the item to the buyer: all at once, or nothing (not enough coins, the item
+    gone)."""
+
+    def __init__(self, deps: Deps) -> None:
+        self.deps, self.views = deps, Views(deps)
+
+    def __call__(self, player: Player, listing_id: str) -> ListingView:
+        d = self.deps
+        now = d.clock.now()
+        with d.store.unit() as u:
+            me = ensure_player(u, player, now)
+            x = u.listing(listing_id, lock=True)
+            if x is None:
+                raise ListingNotFound(listing_id)
+            if not me.has_won and x.seller != me.id:
+                raise TradingLocked("the market opens after your first win (a counted run)")
+            items = u.items([x.item], lock=True)
+            item = items.get(x.item)
+            seller = sell(x, item, me.id, now, d.hold)
+            assert item is not None
+            # (both balances in the players' order: two purchases between the same players don't wait on each other)
+            for pid in sorted((me.id, seller)):
+                if pid == me.id:
+                    u.add_coins(me.id, -x.price, "market_buy", x.id, now)
+                else:
+                    u.add_coins(seller, x.price, "market_sale", x.id, now)
+            u.save_item(item)
+            u.add_transfer(Transfer(item=item.id, from_owner=seller, to_owner=me.id, at=now, listing=x.id,
+                                    price=x.price))
+            u.save_listing(x)
+            unshow(u, [seller], items)
+            log.info("player %s bought %s from %s for %d coins", me.id, item.variant, seller, x.price)
+            return self.views.listing(u, x)
 
 
 class Casino:
@@ -561,8 +956,7 @@ class Casino:
         for v in views:
             self.deps.feed.publish(CasinoEvent("game", v))
 
-    def stake(self, u: Unit, player: Player, bet: NewBet, game_id: str, templates: Sequence[Template],
-              now: datetime) -> Entry:
+    def stake(self, u: Unit, player: Player, bet: NewBet, game_id: str, pools: Pools, now: datetime) -> Entry:
         """The player's entry: their items (theirs, out of their trade hold) staked in the game, at their value."""
         d = self.deps
         seed = bet.seed or d.seeds.seed()[:16]
@@ -572,12 +966,11 @@ class Casino:
             raise TradingLocked("the casino opens after your first win (a counted run)")
         items = u.items(bet.items, lock=True)
         check_items(player.id, bet.items, items, now, moved=False)
-        by_key = {t.key: t for t in templates}
         value = 0
         for i in bet.items:
             item = items[i]
-            t = by_key.get(item.key)
-            worth = odds(t, item.edition, templates) if t else 0
+            t = pools.by_variant.get(item.variant)
+            worth = pools.odds(t, item.edition) if t else 0
             if worth <= 0:
                 raise InvalidBet(f"item {i!r} has no value for now: try again later")
             value += worth
@@ -592,12 +985,7 @@ class Casino:
             u.add_transfer(Transfer(item=item.id, from_owner=before, to_owner=item.owner, at=now, game=game.id))
         for item in items.values():
             u.save_item(item)
-        # (an item shown by its former owner isn't theirs to show any more)
-        for pid in game.players:
-            rec = u.player(pid, lock=True)
-            if rec is not None and rec.showcase in items and items[rec.showcase].owner != pid:
-                rec.showcase = None
-                u.save_player(rec)
+        unshow(u, game.players, items)
         u.save_game(game)
         if game.status is GameStatus.DONE:
             log.info("%s %s: %s won %d items worth %d", game.mode.value, game.id, game.winner, len(game.items),
@@ -699,7 +1087,7 @@ class CreateDuel(Casino):
             chance = bet.chance if bet.chance is not None else 50
             check_chance(chance)
         check_challenge(player.id, bet.opponent)
-        templates = d.catalog.templates()  # (outside the transaction: the game API may be slow)
+        pools = self.views.pools(strict=True)  # (outside the transaction: the game API may be slow)
         now = d.clock.now()
         with d.store.unit() as u:
             if len(u.games(self.mode, GameStatus.OPEN, player.id, MAX_OPEN_COINFLIPS)) >= MAX_OPEN_COINFLIPS:
@@ -714,7 +1102,7 @@ class CreateDuel(Casino):
                         side=(bet.side or Side.CHIPS) if self.mode is Mode.COINFLIP else None, entries=[],
                         server_seed=d.seeds.seed(), created_at=now, updated_at=now, opponent=bet.opponent,
                         chance=chance)
-            game.entries.append(self.stake(u, player, bet, game.id, templates, now))
+            game.entries.append(self.stake(u, player, bet, game.id, pools, now))
             u.add_game(game)
             view = self.view(u, game)
         self.publish([view])
@@ -731,14 +1119,14 @@ class JoinDuel(Casino):
     def __call__(self, player: Player, game_id: str, bet: NewBet) -> GameView:
         self.check_open()
         d = self.deps
-        templates = d.catalog.templates()
+        pools = self.views.pools(strict=True)
         now = d.clock.now()
         with d.store.unit() as u:
             game = u.game(game_id, lock=True)
             if game is None or game.mode is not self.mode:
                 raise GameNotFound(game_id)
             check_join(game, player.id)
-            join_duel(game, self.stake(u, player, bet, game.id, templates, now))
+            join_duel(game, self.stake(u, player, bet, game.id, pools, now))
             draw(game, now)
             self.end(u, game, now)
             view = self.view(u, game)
@@ -783,7 +1171,7 @@ class JoinJackpot(Casino):
     def __call__(self, player: Player, bet: NewBet) -> GameView:
         self.check_open()
         d = self.deps
-        templates = d.catalog.templates()
+        pools = self.views.pools(strict=True)
         now = d.clock.now()
         out: list[GameView] = []
         with d.store.unit() as u:
@@ -792,7 +1180,7 @@ class JoinJackpot(Casino):
                 game = Game(id=d.ids.new_id(), mode=Mode.JACKPOT, status=GameStatus.OPEN, side=None, entries=[],
                             server_seed=d.seeds.seed(), created_at=now, updated_at=now)
                 u.add_game(game)
-            join_jackpot(game, self.stake(u, player, bet, game.id, templates, now), d.jackpot_wait)
+            join_jackpot(game, self.stake(u, player, bet, game.id, pools, now), d.jackpot_wait)
             u.save_game(game)
             view = self.view(u, game)
             out.append(view)
@@ -952,6 +1340,20 @@ class UseCases:
     cancel: CancelTrade
     odds: GetOdds
     give: GiveItem
+    give_coins: GiveCoins
+    coins: MyCoins
+    boosters: ListBoosters
+    buy_booster: BuyBooster
+    packs: MyPacks
+    pack: GetPack
+    choose: ChoosePack
+    market: SearchMarket
+    market_sales: MarketSales
+    my_listings: MyListings
+    listing: GetListing
+    create_listing: CreateListing
+    cancel_listing: CancelListing
+    buy_listing: BuyListing
     casino_rules: CasinoRules
     coinflips: OpenDuels
     create_coinflip: CreateDuel
@@ -979,7 +1381,11 @@ def build(deps: Deps, authenticator: Authenticator) -> UseCases:
         player_items=PlayerItems(deps), player=GetPlayer(deps), find_players=FindPlayers(deps), item=GetItem(deps),
         showcase=SetShowcase(deps), create_trade=CreateTrade(deps), trades=ListTrades(deps), trade=GetTrade(deps),
         accept=AcceptTrade(deps), decline=DeclineTrade(deps), cancel=CancelTrade(deps), odds=GetOdds(deps),
-        give=GiveItem(deps), casino_rules=CasinoRules(deps), coinflips=OpenDuels(deps, Mode.COINFLIP),
+        give=GiveItem(deps), give_coins=GiveCoins(deps), coins=MyCoins(deps), boosters=ListBoosters(deps),
+        buy_booster=BuyBooster(deps), packs=MyPacks(deps), pack=GetPack(deps), choose=ChoosePack(deps),
+        market=SearchMarket(deps), market_sales=MarketSales(deps), my_listings=MyListings(deps),
+        listing=GetListing(deps), create_listing=CreateListing(deps), cancel_listing=CancelListing(deps),
+        buy_listing=BuyListing(deps), casino_rules=CasinoRules(deps), coinflips=OpenDuels(deps, Mode.COINFLIP),
         create_coinflip=CreateDuel(deps, Mode.COINFLIP), join_coinflip=JoinDuel(deps, Mode.COINFLIP),
         cancel_coinflip=CancelDuel(deps, Mode.COINFLIP), dice_games=OpenDuels(deps, Mode.DICE),
         create_dice=CreateDuel(deps, Mode.DICE), join_dice=JoinDuel(deps, Mode.DICE),

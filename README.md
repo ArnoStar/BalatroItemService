@@ -2,54 +2,112 @@
 
 Collectible **items** for Balatro in the browser
 ([BalatroFrontEnd](https://github.com/ArnoStar/BalatroFrontEnd)): the game's
-jokers and tags, each with one of the game's editions (base, foil,
-holographic, polychrome, negative), linked to the player's account.
+cards, each with the upgrades the game gives such a card, linked to the
+player's account.
 
-- They are **found by playing**, a few at a time (below): none can be farmed,
-  so even a common one is worth something.
-- Each has a **rarity** (the game's joker rarities: common, uncommon, rare,
-  legendary), an edition, a **serial number** among the items of its kind and
-  edition (#1 was the first found), and, when it was found by winning, the
-  **stake** it was won at (the game's stake sticker). `odds` says how rare it
-  is: one in N drops.
-- Players **trade** them: an offer of some items for some of another
-  player's, accepted all at once.
-- Players **stake** them in the **casino**: coinflips, dice and a jackpot,
-  player against player, provably fair and live (below). The casino makes no
-  item and keeps none. Its own front end is BalatroCasino, at `/casino/`.
-- They **change nothing in a run**. The game shows the player's chosen item
+- **Jokers**, with an edition: base, foil, holographic, polychrome, negative.
+- **Tarot, planet and spectral cards**: base, or (really rarely) negative.
+- **Playing cards**: an enhancement (Bonus, Mult, Wild, Glass, Steel, Stone,
+  Gold, Lucky), a seal (Gold, Red, Blue, Purple) and an edition but negative.
+
+Playing earns **coins** (below: none can be farmed); coins buy **boosters**,
+packs of cards to choose from, and items other players sell on the
+**market**. Each item has a **rarity** (common, uncommon, rare, legendary), a
+**serial number** among the items of its card, upgrades and edition (#1 was
+the first made), and `odds`: how rare it is, one in N cards of its kind's
+standard table, which is also its **value in coins** (the casino's values).
+Jokers found by winning before boosters carry the **stake** they were won at.
+
+- Players **trade** items (an offer of some items for some of another
+  player's), **sell** them on the market, and **stake** them in the
+  **casino**: coinflips, dice and a jackpot, player against player, provably
+  fair and live (below). Its own front end is BalatroCasino, at `/casino/`.
+- Items **change nothing in a run**. The game shows the player's chosen item
   (their *showcase*) on the title screen in place of the Ace, with its
-  edition's shader, and reveals new items when the player comes back to the
-  title screen; the portal shows inventories, profiles and trades.
+  upgrades and the game's shaders, and tells the player the coins their runs
+  earned when they come back to the title screen; the portal has the shop,
+  the market, inventories, profiles and trades.
 
-## How items are found
+## Coins
 
 The service reads the player's runs from the game API (with their own access
-token). Only **counted** runs earn items: not seeded, no challenge, no debug
+token). Only **counted** runs earn coins: not seeded, no challenge, no debug
 help. Each grant is given once per player, ever:
 
-| Grant | When | Table |
+| Grant | When | Coins |
 |---|---|---|
-| `weekly` | each week (from Monday 00:00 UTC): the first counted run that ends at ante 3 or later, or wins | standard |
-| `weekly_win` | each week: the first counted win | boosted |
-| `first_deck_win` | the first counted win with each deck | boosted |
-| `first_stake_win` | the first counted win at each stake from Red to Black; Gold | boosted; premium |
+| `weekly` | each week (from Monday 00:00 UTC): the first counted run that ends at ante 3 or later, or wins | 100 |
+| `weekly_win` | each week: the first counted win | 250 |
+| `first_deck_win` | the first counted win with each deck | 250 |
+| `first_stake_win` | the first counted win at each stake from Red to Black; Gold | 250; 1,000 |
 
-So a player finds at most two items a week, plus one for each deck and stake
+So a player earns at most 350 coins a week, plus some for each deck and stake
 they win with for the first time. Past weeks earn nothing; past wins earn
-their milestones. An admin may also give an item (`gift`: events, prizes).
+their milestones. Each grant is worth a normal booster of the table it used to
+roll an item on (before boosters, each grant gave an item; grants claimed then
+keep their items and earn no coins). An admin may also give coins (`gift`:
+events, prizes). `GET /v1/me/coins` has a player's balance and where every
+coin came from or went.
 
-Each item is rolled on its table (`GET /v1/odds` has the numbers):
+Coins only change hands on the market: nothing else makes or moves them.
+
+## Boosters
+
+A booster is one kind of card, one **tier** and one **size**, as the game's
+packs (and drawn as them: Buffoon, Arcana, Celestial, Spectral and Standard
+packs):
+
+| Size | Cards shown | Chosen | Price |
+|---|---|---|---|
+| normal | 2 | 1 | the kind's price |
+| jumbo | 4 | 1 | x1.5 |
+| mega | 4 | 2 | x2 |
+
+| Kind | standard | boosted (x2.5) | premium (x10) |
+|---|---|---|---|
+| jokers, playing cards | 100 | 250 | 1,000 |
+| spectral cards | 60 | 150 | 600 |
+| tarot, planet cards | 40 | 100 | 400 |
+
+Buying one opens a **pack**: its cards are rolled at once and kept (coming
+back to it shows the same cards, `GET /v1/me/packs`), then the player chooses
+and only the cards chosen become items (numbered then). A pack never shows the
+same card twice. Each card is rolled on its kind's table for the tier
+(`GET /v1/odds` has every number):
 
 | | standard | boosted | premium |
 |---|---|---|---|
-| kind | joker 85%, tag 15% | joker 85%, tag 15% | joker |
 | rarity | common 70%, uncommon 25%, rare 4.5%, legendary 0.5% | 50 / 35 / 13 / 2% | uncommon 40%, rare 50%, legendary 10% |
-| edition | base 85%, foil 8%, holographic 4.5%, polychrome 2%, negative 0.5% | 70 / 14 / 9 / 5 / 2% | foil 40%, holo 30%, poly 20%, negative 10% |
+| joker edition | base 85%, foil 8%, holographic 4.5%, polychrome 2%, negative 0.5% | 70 / 14 / 9 / 5 / 2% | foil 40%, holo 30%, poly 20%, negative 10% |
+| tarot, planet, spectral | negative 0.1% | 0.3% | 1% |
+| playing card edition | base 92%, foil 4%, holographic 2.8%, polychrome 1.2% (the game's Standard Pack) | 76 / 12 / 8 / 4% | foil 50%, holo 33%, poly 17% |
 
-then one item of that kind and rarity, all equally likely. Tags have no rarity
-in the game: the Negative and Polychrome tags are rare here, Holographic,
-Foil, Rare, Ethereal, Double and Voucher uncommon, the others common.
+then one card of that kind and rarity, all equally likely (a kind without a
+rarity shares its part among the others). Rarities: jokers have the game's;
+a playing card is common plain, uncommon with an enhancement or a seal, rare
+with both; tarot, planet and spectral cards have none in the game, so here The
+Soul and Black Hole are legendary, the secret planets (Planet X, Ceres, Eris),
+The Fool, The Wheel of Fortune, Judgement, Wraith, Ectoplasm, Ankh and Hex
+rare, a few more uncommon (`domain/items.py`, `CONSUMABLE_RARITY`), the
+others common.
+
+Tags were items until boosters came: each was given back to its owner in
+coins, its value then (its odds on the standard table of that time, from 178
+coins for a common tag to 58,963 for a negative rare one), its open casino
+game called off and its pending offers cancelled (migration 4).
+
+## The market
+
+- `POST /v1/market {item, price}`: your item for sale, from 1 to
+  1,000,000,000 coins. Another player buys it at once (`POST
+  /v1/market/{id}/buy`): their coins to you, the item to them, all at once or
+  nothing (`409 not_enough_coins`). You may take it off until then.
+- **The same rules as trades**: both players must have won a counted run, only
+  items out of their trade hold are listed, and an item bought starts its hold.
+  A listed item can't be traded, staked nor listed again until it is sold or
+  taken off. At most 50 items on the market per player.
+- The market keeps no coin and makes no item (no house, no cut).
+  `GET /v1/market/sales?variant=&edition=` has what such an item sold for.
 
 ## Trading
 
@@ -88,10 +146,10 @@ items, never how many there are.
   join it (`opponent`): a friend, or the player you just played. Everyone may
   still watch it, as every game.
 
-**Value and chance.** An item is worth its odds: one in how many drops of the
-standard table it is (`odds`, so a Negative legendary weighs far more than a
-common joker). Your chance is the value of your items over the value of the
-pot. The values are fixed when the items are staked.
+**Value and chance.** An item is worth its odds in coins: one in how many cards
+of its kind's standard table it is (`odds`, so a Negative legendary weighs far
+more than a common joker). Your chance is the value of your items over the
+value of the pot. The values are fixed when the items are staked.
 
 **The same rules as trades.** Only players with a counted win may play, only
 items out of their trade hold may be staked, and the items you win start
@@ -137,16 +195,28 @@ counting down is still drawn.
 ## Endpoints
 
 The site serves the service at `/items/` (the portal's nginx); here are its
-own paths. With sign-in on, every route but `/health`, `/v1/odds` and
+own paths. With sign-in on, every route but `/health`, `/v1/odds`, `/v1/boosters` and
 `/v1/casino/rules` needs an access token from the identity service.
 
 | | |
 |---|---|
 | `GET /health` | `{status, version, auth}` |
-| `GET /v1/odds` | the grants, the tables, how many jokers and tags each rarity has, the trade hold |
-| `GET /v1/me` | you: can you trade, are you an admin, your item count and showcase, this week's drops |
-| `POST /v1/me/drops` | find the items your runs have earned (`found`: the new ones). The game calls it on the title screen |
+| `GET /v1/odds` | the grants, the boosters, the tables, how many cards each kind and rarity has, the trade hold, the market's limits |
+| `GET /v1/me` | you: can you trade, are you an admin, your items, coins and open packs, your showcase, this week's coins |
+| `POST /v1/me/drops` | earn the coins your runs have earned (`earned`: the new grants, `balance`). The game calls it on the title screen |
+| `GET /v1/me/coins` | your coins and their history (the last first) |
 | `GET /v1/me/items` | your items, newest first |
+| `GET /v1/boosters` | what coins buy: each booster's kind, tier, size, price, art and chances |
+| `POST /v1/boosters/{id}/buy` | buy one: a pack, its cards rolled at once |
+| `GET /v1/me/packs?status=open\|opened` | your packs |
+| `GET /v1/packs/{id}` | one of your packs |
+| `POST /v1/packs/{id}/choose` | `{picks: [index ...]}`: the cards you choose become your items |
+| `GET /v1/market?kind=&rarity=&edition=&q=&seller=&sort=newest\|price\|-price&limit=&offset=` | items for sale |
+| `POST /v1/market` | `{item, price}`: sell an item |
+| `GET /v1/market/sales?variant=&edition=&kind=` | the last sales |
+| `GET /v1/market/{id}` | a listing (`available`: it can be bought now) |
+| `POST /v1/market/{id}/buy`, `/cancel` | buy it, or take yours off |
+| `GET /v1/me/listings?box=selling\|sold\|bought\|all` | your market |
 | `PUT /v1/me/showcase` | `{item}`: the item on your title screen and profile (`null`: the game's Ace) |
 | `GET /v1/items/{id}` | an item and its history (who found it, every trade) |
 | `GET /v1/players?q=` | players by the start of their name |
@@ -156,7 +226,8 @@ own paths. With sign-in on, every route but `/health`, `/v1/odds` and
 | `POST /v1/trades` | make an offer |
 | `GET /v1/trades/{id}` | one of your trades (`available`: it can still be accepted) |
 | `POST /v1/trades/{id}/accept`, `/decline`, `/cancel` | answer an offer made to you, or cancel yours |
-| `POST /v1/admin/gifts` | `{to, key, edition, stake}`: give an item (the admin role, or `BALATRO_ITEMS_ADMINS`) |
+| `POST /v1/admin/gifts` | `{to, key, edition, stake, enhancement, seal}`: give an item (the admin role, or `BALATRO_ITEMS_ADMINS`) |
+| `POST /v1/admin/coins` | `{to, coins, note}`: give coins (negative: take them back, down to 0) |
 | `GET /v1/casino/rules` | is the casino open, its limits, the dice's chances, the jackpot's countdown |
 | `GET /v1/casino/live` | the casino, live (server-sent events: `hello`, then `game`) |
 | `GET /v1/casino/coinflips` | the coinflips waiting for a player (challenges too), newest first |
@@ -180,15 +251,24 @@ Errors are problem details with a stable `code`: `item_not_found`,
 `item_locked`, `items_moved`, `trade_closed`, `trading_locked`,
 `not_allowed`, `too_many_offers`, `not_admin`, `unknown_item`,
 `game_not_found`, `invalid_bet`, `game_closed`, `too_many_games`,
-`casino_closed`, `game_api_unavailable`, `unauthenticated`. Interactive docs at `/docs`.
+`casino_closed`, `not_enough_coins`, `booster_not_found`, `pack_not_found`,
+`pack_opened`, `invalid_pick`, `listing_not_found`, `invalid_listing`,
+`listing_closed`, `too_many_listings`, `game_api_unavailable`,
+`unauthenticated`. Interactive docs at `/docs`.
 
 An item, as every answer has it:
 
 ```
-{id, kind: joker|tag, key: "j_blueprint", name: "Blueprint", edition, rarity: 1-4,
- stake: 1-8|null, serial, minted, odds, owner, owner_name, source, source_run,
- found_at, acquired_at, tradable_at, tradable, staked: <game id>|null, sprite: {atlas, pos: {x, y}, soul_pos}}
+{id, kind: joker|tarot|planet|spectral|card, key: "j_blueprint" | "c_fool" | "S_A", name: "Blueprint", edition,
+ rarity: 1-4, enhancement: "m_glass"|null, seal: "Red"|null, variant: "S_A+m_glass+Red", stake: 1-8|null, serial,
+ minted, odds, owner, owner_name, source: booster|gift|..., source_run, booster, found_at, acquired_at, tradable_at,
+ tradable, staked: <game id>|null, listed: <listing id>|null, price: <coins>|null,
+ sprite: {atlas, pos: {x, y}, soul_pos, overlay, front, seal}}
 ```
+
+A playing card's sprite is its center (the enhancement, or the blank card),
+its `front` (the rank and suit: none for a Stone Card) and its `seal`; The
+Soul's `overlay` is its gem.
 
 ## Settings
 
@@ -234,8 +314,9 @@ Clean architecture, as BalatroWebAPI (`AGENTS.md`):
 
 ```
 src/balatro_items/
-  domain/           Item, Trade and their rules; drops.py: the grants, tables, rolls and odds;
-                    casino.py: the coinflip, the dice, the jackpot, challenges, the draw, the tallies
+  domain/           Item, Trade and their rules; drops.py: the grants (coins); boosters.py: the boosters, tables,
+                    rolls, odds, packs; market.py: listings, sales; casino.py: the coinflip, the dice,
+                    the jackpot, challenges, the draw, the tallies
   application/      use cases, DTOs, ports (the store's Unit, the game API, the clock, ids)
   infrastructure/   auth (the identity service's tokens), game_api (runs, catalog), persistence (PostgreSQL, memory),
                     feed (the casino's live streams, in memory)

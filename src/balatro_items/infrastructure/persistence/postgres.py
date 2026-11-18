@@ -21,14 +21,23 @@ from psycopg.rows import DictRow, dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolTimeout
 
+from balatro_items.application.dto import ListingQuery
 from balatro_items.domain import (
+    Choice,
+    CoinMove,
     Edition,
     Entry,
     Game,
     GameStatus,
     Item,
     Kind,
+    Listing,
+    ListingStatus,
     Mode,
+    NotEnoughCoins,
+    Pack,
+    PackStatus,
+    PlayerNotFound,
     PlayerRecord,
     Rarity,
     Side,
@@ -133,16 +142,111 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE games ADD COLUMN chance SMALLINT;
     CREATE INDEX games_updated ON games (status, updated_at DESC);
     """,
+    # 4: coins (and their history), boosters' packs, the market, playing cards' upgrades; the tags leave, each given
+    # back to its owner in coins, its value (domain/drops.py, RETIRED_TAG_COINS): their open casino games are called
+    # off (every item back to its owner) and their pending offers cancelled
+    """
+    ALTER TABLE players ADD COLUMN coins BIGINT NOT NULL DEFAULT 0 CHECK (coins >= 0);
+    CREATE TABLE coin_moves (
+        seq BIGSERIAL PRIMARY KEY,
+        player TEXT NOT NULL,
+        amount BIGINT NOT NULL,
+        balance BIGINT NOT NULL,
+        reason TEXT NOT NULL,
+        ref TEXT,
+        at TIMESTAMPTZ NOT NULL
+    );
+    CREATE INDEX coin_moves_player ON coin_moves (player, seq DESC);
+    ALTER TABLE claims ALTER COLUMN item DROP NOT NULL;
+    ALTER TABLE claims ADD COLUMN coins INTEGER;
+    ALTER TABLE items ADD COLUMN enhancement TEXT, ADD COLUMN seal TEXT, ADD COLUMN listed TEXT,
+        ADD COLUMN booster TEXT;
+    ALTER TABLE items DROP CONSTRAINT items_key_edition_serial_key;
+    CREATE UNIQUE INDEX items_serial ON items (key, COALESCE(enhancement, ''), COALESCE(seal, ''), edition, serial);
+    ALTER TABLE transfers ADD COLUMN listing TEXT, ADD COLUMN price BIGINT;
+    CREATE TABLE packs (
+        id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        booster TEXT NOT NULL,
+        price INTEGER NOT NULL,
+        picks SMALLINT NOT NULL,
+        choices JSONB NOT NULL,
+        status TEXT NOT NULL,
+        chosen SMALLINT[] NOT NULL DEFAULT '{}',
+        items TEXT[] NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL,
+        opened_at TIMESTAMPTZ
+    );
+    CREATE INDEX packs_owner ON packs (owner, status, created_at DESC);
+    CREATE TABLE listings (
+        id TEXT PRIMARY KEY,
+        seller TEXT NOT NULL,
+        item TEXT NOT NULL,
+        price BIGINT NOT NULL,
+        status TEXT NOT NULL,
+        buyer TEXT,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE UNIQUE INDEX listings_one_open ON listings (item) WHERE status = 'open';
+    CREATE INDEX listings_status ON listings (status, updated_at DESC);
+    CREATE INDEX listings_open_price ON listings (price) WHERE status = 'open';
+    CREATE INDEX listings_seller ON listings (seller, updated_at DESC);
+    CREATE INDEX listings_buyer ON listings (buyer, updated_at DESC);
+
+    CREATE TEMP TABLE retired_tags ON COMMIT DROP AS
+        SELECT i.id, i.owner, i.key || ':' || i.edition AS ref, COALESCE(v.coins, 0) AS coins
+        FROM items i LEFT JOIN (VALUES
+        (1, 'base', 178),
+        (1, 'foil', 1895),
+        (1, 'holographic', 3369),
+        (1, 'polychrome', 7581),
+        (1, 'negative', 30324),
+        (2, 'base', 187),
+        (2, 'foil', 1990),
+        (2, 'holographic', 3538),
+        (2, 'polychrome', 7960),
+        (2, 'negative', 31840),
+        (3, 'base', 347),
+        (3, 'foil', 3685),
+        (3, 'holographic', 6551),
+        (3, 'polychrome', 14741),
+        (3, 'negative', 58963)
+        ) AS v (rarity, edition, coins) ON v.rarity = i.rarity AND v.edition = i.edition
+        WHERE i.kind = 'tag';
+    CREATE TEMP TABLE retired_games ON COMMIT DROP AS
+        SELECT DISTINCT staked AS id FROM items WHERE kind = 'tag' AND staked IS NOT NULL;
+    UPDATE games SET status = 'cancelled', updated_at = now()
+        WHERE status = 'open' AND id IN (SELECT id FROM retired_games);
+    UPDATE items SET staked = NULL WHERE staked IN (SELECT id FROM retired_games);
+    UPDATE trades SET status = 'cancelled', updated_at = now()
+        WHERE status = 'pending' AND (give || take) && ARRAY(SELECT id FROM retired_tags);
+    UPDATE players SET showcase = NULL WHERE showcase IN (SELECT id FROM retired_tags);
+    INSERT INTO coin_moves (player, amount, balance, reason, ref, at)
+        SELECT owner, coins, sum(coins) OVER (PARTITION BY owner ORDER BY id), 'tag_refund', ref, now()
+        FROM retired_tags WHERE coins > 0 ORDER BY owner, id;
+    UPDATE players p SET coins = p.coins + r.coins
+        FROM (SELECT owner, sum(coins) AS coins FROM retired_tags GROUP BY owner) AS r WHERE p.id = r.owner;
+    DELETE FROM transfers WHERE item IN (SELECT id FROM retired_tags);
+    DELETE FROM items WHERE id IN (SELECT id FROM retired_tags);
+    """,
 )
 
 ITEM_COLUMNS = ("id", "kind", "key", "edition", "rarity", "stake", "serial", "owner", "source", "source_run",
-                "created_at", "acquired_at", "tradable_at", "staked")
+                "created_at", "acquired_at", "tradable_at", "staked", "enhancement", "seal", "listed", "booster")
 SELECT_ITEMS = sql.SQL("SELECT {} FROM items").format(sql.SQL(", ").join(sql.Identifier(c) for c in ITEM_COLUMNS))
 SELECT_TRADES = ("SELECT id, sender, recipient, give, take, message, status, created_at, updated_at, expires_at "
                  "FROM trades")
 GAME_COLUMNS = ("id", "mode", "status", "side", "entries", "players", "server_seed", "created_at", "updated_at",
                 "closes_at", "roll", "winner", "opponent", "chance")
 SELECT_GAMES = sql.SQL("SELECT {} FROM games").format(sql.SQL(", ").join(sql.Identifier(c) for c in GAME_COLUMNS))
+PACK_COLUMNS = ("id", "owner", "booster", "price", "picks", "choices", "status", "chosen", "items", "created_at",
+                "opened_at")
+SELECT_PACKS = sql.SQL("SELECT {} FROM packs").format(sql.SQL(", ").join(sql.Identifier(c) for c in PACK_COLUMNS))
+LISTING_COLUMNS = ("id", "seller", "item", "price", "status", "buyer", "created_at", "updated_at")
+VARIANT = "(i.key || COALESCE('+' || i.enhancement, '') || COALESCE('+' || i.seal, ''))"  # (items.variant)
+LISTING_ORDER = {"newest": "l.updated_at DESC, l.id DESC", "price": "l.price ASC, l.updated_at DESC, l.id DESC",
+                 "-price": "l.price DESC, l.updated_at DESC, l.id DESC"}
 
 
 class DatabaseUnavailable(RuntimeError):
@@ -162,12 +266,35 @@ def _item(r: DictRow) -> Item:
     return Item(id=r["id"], kind=Kind(r["kind"]), key=r["key"], edition=Edition(r["edition"]),
                 rarity=Rarity(r["rarity"]), stake=r["stake"], serial=r["serial"], owner=r["owner"],
                 source=r["source"], source_run=r["source_run"], created_at=r["created_at"],
-                acquired_at=r["acquired_at"], tradable_at=r["tradable_at"], staked=r["staked"])
+                acquired_at=r["acquired_at"], tradable_at=r["tradable_at"], staked=r["staked"],
+                enhancement=r["enhancement"], seal=r["seal"], listed=r["listed"], booster=r["booster"])
 
 
 def _player(r: DictRow) -> PlayerRecord:
     return PlayerRecord(id=r["id"], name=r["name"], has_won=r["has_won"], showcase=r["showcase"],
-                        created_at=r["created_at"], synced_at=r["synced_at"])
+                        created_at=r["created_at"], synced_at=r["synced_at"], coins=int(r["coins"]))
+
+
+def _pack(r: DictRow) -> Pack:
+    choices = [Choice(kind=Kind(c["kind"]), key=c["key"], rarity=Rarity(c["rarity"]), edition=Edition(c["edition"]),
+                      enhancement=c.get("enhancement"), seal=c.get("seal")) for c in r["choices"]]
+    return Pack(id=r["id"], owner=r["owner"], booster=r["booster"], price=r["price"], picks=r["picks"],
+                choices=choices, status=PackStatus(r["status"]), created_at=r["created_at"], opened_at=r["opened_at"],
+                chosen=tuple(r["chosen"]), items=tuple(r["items"]))
+
+
+def _pack_row(p: Pack) -> dict[str, Any]:
+    choices = [{"kind": c.kind.value, "key": c.key, "rarity": int(c.rarity), "edition": c.edition.value,
+                "enhancement": c.enhancement, "seal": c.seal} for c in p.choices]
+    return {"id": p.id, "owner": p.owner, "booster": p.booster, "price": p.price, "picks": p.picks,
+            "choices": Jsonb(choices), "status": p.status.value, "chosen": list(p.chosen), "items": list(p.items),
+            "created_at": p.created_at, "opened_at": p.opened_at}
+
+
+def _listing(r: DictRow) -> Listing:
+    return Listing(id=r["id"], seller=r["seller"], item=r["item"], price=int(r["price"]),
+                   status=ListingStatus(r["status"]), created_at=r["created_at"], updated_at=r["updated_at"],
+                   buyer=r["buyer"])
 
 
 def _trade(r: DictRow) -> Trade:
@@ -231,10 +358,10 @@ class PostgresUnit:
         return [_item(r) for r in self.c.execute(q, (owner,)).fetchall()]
 
     def add_item(self, item: Item) -> Item:
-        row = self.c.execute(
+        row = self.c.execute(  # (serials count by variant: a playing card's upgrades make another)
             "INSERT INTO serials (key, edition, last) VALUES (%s, %s, 1) "
             "ON CONFLICT (key, edition) DO UPDATE SET last = serials.last + 1 RETURNING last",
-            (item.key, item.edition.value)).fetchone()
+            (item.variant, item.edition.value)).fetchone()
         assert row is not None
         item.serial = row["last"]
         values: dict[str, Any] = {c: getattr(item, c) for c in ITEM_COLUMNS}
@@ -245,31 +372,116 @@ class PostgresUnit:
         return item
 
     def save_item(self, item: Item) -> None:
-        self.c.execute("UPDATE items SET owner = %s, acquired_at = %s, tradable_at = %s, staked = %s WHERE id = %s",
-                       (item.owner, item.acquired_at, item.tradable_at, item.staked, item.id))
+        self.c.execute("UPDATE items SET owner = %s, acquired_at = %s, tradable_at = %s, staked = %s, listed = %s "
+                       "WHERE id = %s",
+                       (item.owner, item.acquired_at, item.tradable_at, item.staked, item.listed, item.id))
 
-    def minted(self, key: str, edition: Edition) -> int:
+    def minted(self, variant: str, edition: Edition) -> int:
         row = self.c.execute("SELECT last FROM serials WHERE key = %s AND edition = %s",
-                             (key, edition.value)).fetchone()
+                             (variant, edition.value)).fetchone()
         return int(row["last"]) if row else 0
 
     def add_transfer(self, t: Transfer) -> None:
-        self.c.execute("INSERT INTO transfers (item, from_owner, to_owner, at, trade, game) "
-                       "VALUES (%s, %s, %s, %s, %s, %s)", (t.item, t.from_owner, t.to_owner, t.at, t.trade, t.game))
+        self.c.execute("INSERT INTO transfers (item, from_owner, to_owner, at, trade, game, listing, price) "
+                       "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                       (t.item, t.from_owner, t.to_owner, t.at, t.trade, t.game, t.listing, t.price))
 
     def transfers(self, item_id: str) -> builtins.list[Transfer]:
-        rows = self.c.execute("SELECT item, from_owner, to_owner, at, trade, game FROM transfers WHERE item = %s "
-                              "ORDER BY seq", (item_id,)).fetchall()
+        rows = self.c.execute("SELECT item, from_owner, to_owner, at, trade, game, listing, price FROM transfers "
+                              "WHERE item = %s ORDER BY seq", (item_id,)).fetchall()
         return [Transfer(item=r["item"], from_owner=r["from_owner"], to_owner=r["to_owner"], at=r["at"],
-                         trade=r["trade"], game=r["game"]) for r in rows]
+                         trade=r["trade"], game=r["game"], listing=r["listing"],
+                         price=int(r["price"]) if r["price"] is not None else None) for r in rows]
 
     def claims(self, owner: str) -> set[str]:
         return {r["source"] for r in self.c.execute("SELECT source FROM claims WHERE owner = %s", (owner,))}
 
-    def claim(self, owner: str, source: str, item_id: str, run: str | None, at: datetime) -> bool:
-        cur = self.c.execute("INSERT INTO claims (owner, source, item, run, at) VALUES (%s, %s, %s, %s, %s) "
-                             "ON CONFLICT (owner, source) DO NOTHING", (owner, source, item_id, run, at))
+    def claim(self, owner: str, source: str, run: str | None, at: datetime, coins: int) -> bool:
+        cur = self.c.execute("INSERT INTO claims (owner, source, run, at, coins) VALUES (%s, %s, %s, %s, %s) "
+                             "ON CONFLICT (owner, source) DO NOTHING", (owner, source, run, at, coins))
         return cur.rowcount == 1
+
+    def add_coins(self, player: str, amount: int, reason: str, ref: str | None, at: datetime) -> int:
+        row = self.c.execute("UPDATE players SET coins = coins + %(n)s WHERE id = %(p)s AND coins + %(n)s >= 0 "
+                             "RETURNING coins", {"n": amount, "p": player}).fetchone()
+        if row is None:
+            have = self.c.execute("SELECT coins FROM players WHERE id = %s", (player,)).fetchone()
+            if have is None:
+                raise PlayerNotFound(player)
+            raise NotEnoughCoins(f"this takes {-amount:,} coins and you have {int(have['coins']):,}")
+        balance = int(row["coins"])
+        self.c.execute("INSERT INTO coin_moves (player, amount, balance, reason, ref, at) "
+                       "VALUES (%s, %s, %s, %s, %s, %s)", (player, amount, balance, reason, ref, at))
+        return balance
+
+    def coin_moves(self, player: str, limit: int) -> builtins.list[CoinMove]:
+        rows = self.c.execute("SELECT player, amount, balance, reason, ref, at FROM coin_moves WHERE player = %s "
+                              "ORDER BY seq DESC LIMIT %s", (player, limit)).fetchall()
+        return [CoinMove(player=r["player"], amount=int(r["amount"]), balance=int(r["balance"]), reason=r["reason"],
+                         ref=r["ref"], at=r["at"]) for r in rows]
+
+    def pack(self, pack_id: str, lock: bool = False) -> Pack | None:
+        q = SELECT_PACKS + sql.SQL(" WHERE id = %s") + sql.SQL(" FOR UPDATE" if lock else "")
+        row = self.c.execute(q, (pack_id,)).fetchone()
+        return _pack(row) if row else None
+
+    def add_pack(self, p: Pack) -> None:
+        self.c.execute(sql.SQL("INSERT INTO packs ({}) VALUES ({})").format(
+            sql.SQL(", ").join(sql.Identifier(c) for c in PACK_COLUMNS),
+            sql.SQL(", ").join(sql.Placeholder(c) for c in PACK_COLUMNS)), _pack_row(p))
+
+    def save_pack(self, p: Pack) -> None:
+        self.c.execute("UPDATE packs SET status = %(status)s, chosen = %(chosen)s, items = %(items)s, "
+                       "opened_at = %(opened_at)s WHERE id = %(id)s", _pack_row(p))
+
+    def packs_of(self, owner: str, status: PackStatus | None, limit: int) -> builtins.list[Pack]:
+        q = SELECT_PACKS + sql.SQL(" WHERE owner = %(o)s") + sql.SQL(
+            " AND status = %(s)s" if status else "") + sql.SQL(" ORDER BY created_at DESC, id DESC LIMIT %(n)s")
+        rows = self.c.execute(q, {"o": owner, "s": status.value if status else None, "n": limit}).fetchall()
+        return [_pack(r) for r in rows]
+
+    def listing(self, listing_id: str, lock: bool = False) -> Listing | None:
+        row = self.c.execute("SELECT * FROM listings WHERE id = %s" + (" FOR UPDATE" if lock else ""),
+                             (listing_id,)).fetchone()
+        return _listing(row) if row else None
+
+    def add_listing(self, x: Listing) -> None:
+        self.c.execute("INSERT INTO listings (id, seller, item, price, status, buyer, created_at, updated_at) "
+                       "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                       (x.id, x.seller, x.item, x.price, x.status.value, x.buyer, x.created_at, x.updated_at))
+
+    def save_listing(self, x: Listing) -> None:
+        self.c.execute("UPDATE listings SET status = %s, buyer = %s, updated_at = %s WHERE id = %s",
+                       (x.status.value, x.buyer, x.updated_at, x.id))
+
+    def listings(self, q: ListingQuery) -> builtins.list[Listing]:
+        cond: list[str] = []
+        args: dict[str, Any] = {"n": q.limit, "o": q.offset}
+        for name, column, value in (("status", "l.status", q.status.value if q.status else None),
+                                    ("kind", "i.kind", q.kind.value if q.kind else None),
+                                    ("rarity", "i.rarity", int(q.rarity) if q.rarity else None),
+                                    ("edition", "i.edition", q.edition.value if q.edition else None),
+                                    ("variant", VARIANT, q.variant), ("seller", "l.seller", q.seller),
+                                    ("buyer", "l.buyer", q.buyer)):
+            if value is not None:
+                cond.append(f"{column} = %({name})s")
+                args[name] = value
+        if q.keys is not None:
+            cond.append("i.key = ANY(%(keys)s)")
+            args["keys"] = list(q.keys)
+        if q.player is not None:
+            cond.append("(l.seller = %(player)s OR l.buyer = %(player)s)")
+            args["player"] = q.player
+        where_ = f" WHERE {' AND '.join(cond)}" if cond else ""
+        rows = self.c.execute(f"SELECT l.* FROM listings l JOIN items i ON i.id = l.item{where_} "
+                              f"ORDER BY {LISTING_ORDER.get(q.sort, LISTING_ORDER['newest'])} "
+                              "LIMIT %(n)s OFFSET %(o)s", args).fetchall()
+        return [_listing(r) for r in rows]
+
+    def open_listings_of(self, seller: str) -> int:
+        row = self.c.execute("SELECT count(*) AS n FROM listings WHERE seller = %s AND status = 'open'",
+                             (seller,)).fetchone()
+        return int(row["n"]) if row else 0
 
     def trade(self, trade_id: str, lock: bool = False) -> Trade | None:
         row = self.c.execute(SELECT_TRADES + " WHERE id = %s" + (" FOR UPDATE" if lock else ""),

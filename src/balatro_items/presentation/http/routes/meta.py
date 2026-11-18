@@ -18,8 +18,8 @@ def health(request: Request) -> dict[str, Any]:
             "auth": "required" if uses.authenticate.authenticator.required else "off"}
 
 
-@router.get("/v1/odds", response_model=OddsView, summary="How items are found, in numbers")
+@router.get("/v1/odds", response_model=OddsView, summary="How coins are earned and what boosters give, in numbers")
 def drop_odds(uses: Uses) -> OddsView:
-    """The rules that give items, each table's chances (kind, rarity, edition, in percent), how
-    many jokers and tags each rarity has, and the trade hold. Public."""
+    """The grants that give coins, the boosters, each table's chances (rarity, edition, in percent), how
+    many cards each kind and rarity has, the trade hold and the market's limits. Public."""
     return uses.odds()

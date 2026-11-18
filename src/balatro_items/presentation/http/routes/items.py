@@ -11,16 +11,16 @@ from balatro_items.presentation.http.schemas import GiftRequest, ShowcaseRequest
 router = APIRouter(prefix="/v1", tags=["items"])
 
 
-@router.get("/me", response_model=MeView, summary="You: your items, your showcase, this week's drops")
+@router.get("/me", response_model=MeView, summary="You: your items, coins, showcase, this week's coins")
 def me(player: CurrentPlayer, uses: Uses) -> MeView:
     return uses.me(player)
 
 
-@router.post("/me/drops", response_model=DropsView, summary="Find the items your runs have earned")
-def find_items(player: CurrentPlayer, uses: Uses) -> DropsView:
-    """Reads your runs from the game's server and gives the items they have earned (GET /v1/odds
-    says how): each at most once. ``found`` is empty when there is nothing new. The game calls it
-    when you come back to the title screen."""
+@router.post("/me/drops", response_model=DropsView, summary="Earn the coins your runs have earned")
+def earn_coins(player: CurrentPlayer, uses: Uses) -> DropsView:
+    """Reads your runs from the game's server and gives the coins they have earned (GET /v1/odds
+    says how): each grant at most once. ``earned`` is empty when there is nothing new. The game calls
+    it when you come back to the title screen."""
     return uses.sync(player)
 
 
@@ -61,6 +61,6 @@ def player_items(player_id: str, player: CurrentPlayer, uses: Uses) -> list[Item
 @router.post("/admin/gifts", response_model=ItemView, status_code=status.HTTP_201_CREATED,
              summary="Give an item (admins)")
 def give(body: GiftRequest, player: CurrentPlayer, uses: Uses) -> ItemView:
-    """For events and prizes: the only way to make an item outside the drops. Its source says
+    """For events and prizes: the only way to make an item outside the boosters. Its source says
     ``gift``."""
     return uses.give(player, body.to_dto())

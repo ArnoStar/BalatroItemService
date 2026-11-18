@@ -7,7 +7,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from balatro_items.domain import Edition, GameStatus, Kind, Mode, Rarity, Side, TradeStatus
+from balatro_items.domain import (
+    Edition,
+    GameStatus,
+    Kind,
+    ListingStatus,
+    Mode,
+    PackStatus,
+    Rarity,
+    Side,
+    Size,
+    Tier,
+    TradeStatus,
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -27,35 +39,45 @@ class Player:
 class ItemView:
     id: str
     kind: Kind
-    key: str  # the game's key (j_joker, tag_negative ...)
+    key: str  # the game's key (j_joker, c_fool, a playing card's S_A ...)
     name: str
     edition: Edition
     rarity: Rarity  # 1 Common, 2 Uncommon, 3 Rare, 4 Legendary
     stake: int | None  # the stake of the win it came from (the game's stake sticker); None: not from a win
-    serial: int  # its number among the items of its key and edition (#1: the first found)
-    minted: int  # how many items of its key and edition have been found so far
-    odds: int  # one in this many drops (standard table) is this item with this edition: higher is rarer
+    serial: int  # its number among the items of its variant and edition (#1: the first made)
+    minted: int  # how many items of its variant and edition have been made so far
+    odds: int  # one in this many cards of its kind's standard table is this one: higher is rarer (its value)
     owner: str
     owner_name: str | None
-    source: str  # weekly, weekly_win, first_deck_win, first_stake_win, gift
-    source_run: str | None  # the run it was found in (watchable in the game)
+    source: str  # booster, gift (before boosters: weekly, weekly_win, first_deck_win, first_stake_win)
+    source_run: str | None  # the run it was found in (watchable in the game), before boosters
     found_at: datetime
     acquired_at: datetime  # when its owner got it
     tradable_at: datetime  # the end of its trade hold
-    tradable: bool  # out of its trade hold and not staked
+    tradable: bool  # out of its trade hold, not staked and not for sale
     staked: str | None  # the casino game it is staked in (it can't change hands until the game ends)
-    sprite: dict[str, Any] | None = None  # the game's sprite: {atlas, pos: {x, y}, soul_pos}
+    # the game's sprite: {atlas, pos: {x, y}, soul_pos, overlay}; a playing card's also {front, seal} (each
+    # {atlas, pos}; front null for a Stone Card)
+    sprite: dict[str, Any] | None = None
+    enhancement: str | None = None  # a playing card's (m_bonus ... m_lucky)
+    seal: str | None = None  # a playing card's (Gold, Red, Blue, Purple)
+    variant: str = ""  # the card and its upgrades, as serial numbers count them (S_A+m_glass+Red)
+    listed: str | None = None  # its open listing on the market
+    price: int | None = None  # its price there, in coins
+    booster: str | None = None  # the booster it came from
 
 
 @dataclass(frozen=True, kw_only=True)
 class TransferView:
-    from_player: str | None  # None: found
+    from_player: str | None  # None: made (a booster, a gift)
     from_name: str | None
     to_player: str
     to_name: str | None
     at: datetime
     trade: str | None
     game: str | None  # the casino game it was won in
+    listing: str | None = None  # the market listing it was bought from
+    price: int | None = None  # coins
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -67,25 +89,39 @@ class ItemDetail:
 @dataclass(frozen=True, kw_only=True)
 class WeekView:
     week: str  # ISO week (UTC), e.g. 2026-W46
-    weekly_found: bool  # this week's item for a finished run (ante 3 or more) is found
-    weekly_win_found: bool  # this week's item for a win is found
-    next_week_at: datetime  # when the next week's items can be found
+    weekly_earned: bool  # this week's coins for a finished run (ante 3 or more) are earned
+    weekly_win_earned: bool  # this week's coins for a win are earned
+    weekly_coins: int  # what they are worth
+    weekly_win_coins: int
+    next_week_at: datetime  # when the next week's coins can be earned
 
 
 @dataclass(frozen=True, kw_only=True)
 class MeView:
     id: str
     name: str | None
-    can_trade: bool  # trading opens after the first counted win
-    admin: bool  # may give items (admins)
+    can_trade: bool  # trading (and the market, the casino) open after the first counted win
+    admin: bool  # may give items and coins (admins)
     items: int
+    coins: int
+    packs: int  # packs bought and not chosen from yet
     showcase: ItemView | None
     week: WeekView
 
 
 @dataclass(frozen=True, kw_only=True)
+class EarnedView:
+    source: str  # the grant (week:2026-W46:play, deck:b_red ...)
+    reason: str  # weekly, weekly_win, first_deck_win, first_stake_win
+    coins: int
+    run: str | None  # the run that earned it
+
+
+@dataclass(frozen=True, kw_only=True)
 class DropsView:
-    found: list[ItemView]  # the items just found (none: nothing new)
+    earned: list[EarnedView]  # the grants just earned (none: nothing new)
+    coins: int  # their coins together
+    balance: int  # the player's coins now
     week: WeekView
 
 
@@ -126,28 +162,46 @@ class NewTrade:
 
 @dataclass(frozen=True, kw_only=True)
 class TableView:
-    name: str
-    kinds: dict[str, float]  # percent
-    rarities: dict[str, float]
-    editions: dict[str, float]
+    kind: Kind
+    tier: Tier
+    rarities: dict[str, float]  # percent, among the rarities the kind has
+    editions: dict[str, float]  # percent
 
 
 @dataclass(frozen=True, kw_only=True)
 class RuleView:
     source: str
-    table: str
+    coins: int
     description: str
 
 
 @dataclass(frozen=True, kw_only=True)
+class BoosterView:
+    id: str  # <kind>_<tier>_<size>
+    kind: Kind
+    tier: Tier
+    size: Size
+    choices: int  # cards shown
+    picks: int  # cards chosen
+    price: int  # coins
+    art: str  # the game's pack it looks like (p_buffoon_mega_1 ...): its sprite is the catalog's
+    rarities: dict[str, float]  # percent, a card's chances
+    editions: dict[str, float]
+
+
+@dataclass(frozen=True, kw_only=True)
 class OddsView:
-    """How items are found, in numbers."""
+    """How coins are earned and what boosters give, in numbers."""
 
     rules: list[RuleView]
+    boosters: list[BoosterView]
     tables: list[TableView]
-    pools: dict[str, dict[str, int]]  # kind -> rarity -> how many items
+    pools: dict[str, dict[str, int]]  # kind -> rarity -> how many cards
     trade_hold_days: float
     offer_days: int
+    market_min_price: int
+    market_max_price: int
+    market_max_listings: int
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -156,6 +210,103 @@ class Gift:
     key: str
     edition: Edition = Edition.BASE
     stake: int | None = None
+    enhancement: str | None = None  # a playing card's
+    seal: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class CoinGift:
+    to: str
+    coins: int
+    note: str = ""
+
+
+@dataclass(frozen=True, kw_only=True)
+class CoinMoveView:
+    amount: int  # in (> 0) or out
+    balance: int  # after
+    reason: str  # weekly, weekly_win, first_deck_win, first_stake_win, booster, market_buy, market_sale,
+    # tag_refund, gift
+    ref: str | None  # what for: the grant, the pack, the listing, the tag ...
+    at: datetime
+
+
+@dataclass(frozen=True, kw_only=True)
+class CoinsView:
+    balance: int
+    moves: list[CoinMoveView]  # the last first
+
+
+@dataclass(frozen=True, kw_only=True)
+class ChoiceView:
+    """A card in a pack."""
+
+    index: int
+    kind: Kind
+    key: str
+    name: str
+    rarity: Rarity
+    edition: Edition
+    enhancement: str | None
+    seal: str | None
+    variant: str
+    odds: int  # as an item's
+    minted: int  # how many items of it there are already
+    sprite: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class PackView:
+    id: str
+    booster: BoosterView
+    price: int  # the coins it cost
+    picks: int
+    status: PackStatus
+    choices: list[ChoiceView]
+    chosen: list[int]  # once opened
+    items: list[ItemView]  # the items the cards chosen became
+    created_at: datetime
+    opened_at: datetime | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ListingQuery:
+    """Which listings: their status, the item's kind, rarity, edition, keys or variant, the seller or buyer; the
+    order (``newest``, ``price``: cheapest first, ``-price``) and the page."""
+
+    status: ListingStatus | None = ListingStatus.OPEN  # (None: any)
+    kind: Kind | None = None
+    rarity: Rarity | None = None
+    edition: Edition | None = None
+    keys: tuple[str, ...] | None = None  # the item is one of these cards
+    variant: str | None = None
+    seller: str | None = None
+    buyer: str | None = None
+    player: str | None = None  # the seller or the buyer
+    sort: str = "newest"
+    limit: int = 50
+    offset: int = 0
+
+
+@dataclass(frozen=True, kw_only=True)
+class ListingView:
+    id: str
+    seller: str
+    seller_name: str | None
+    item: ItemView | None  # (None: the item is gone)
+    price: int  # coins
+    status: ListingStatus
+    available: bool  # it can be bought now
+    buyer: str | None
+    buyer_name: str | None
+    created_at: datetime
+    updated_at: datetime  # sold or taken off then
+
+
+@dataclass(frozen=True, kw_only=True)
+class NewListing:
+    item: str
+    price: int
 
 
 @dataclass(frozen=True, kw_only=True)
