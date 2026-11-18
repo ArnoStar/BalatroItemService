@@ -9,11 +9,15 @@ from datetime import datetime
 from typing import Protocol
 
 from balatro_items.domain import (
+    CoinMove,
     Edition,
     Game,
     GameStatus,
     Item,
+    Listing,
     Mode,
+    Pack,
+    PackStatus,
     PlayerRecord,
     RunRecord,
     Template,
@@ -21,7 +25,7 @@ from balatro_items.domain import (
     Transfer,
 )
 
-from .dto import CasinoEvent, Player
+from .dto import CasinoEvent, ListingQuery, Player
 
 
 class Unit(Protocol):
@@ -45,13 +49,15 @@ class Unit(Protocol):
         ...
 
     def add_item(self, item: Item) -> Item:
-        """Stores a new item and gives it its serial number."""
+        """Stores a new item and gives it its serial number (among its variant's and edition's)."""
         ...
 
-    def save_item(self, item: Item) -> None: ...
+    def save_item(self, item: Item) -> None:
+        """Its owner, acquired_at, tradable_at, staked and listed."""
+        ...
 
-    def minted(self, key: str, edition: Edition) -> int:
-        """How many items of this key and edition have been found."""
+    def minted(self, variant: str, edition: Edition) -> int:
+        """How many items of this variant (items.variant) and edition have been made."""
         ...
 
     def add_transfer(self, t: Transfer) -> None: ...
@@ -62,9 +68,42 @@ class Unit(Protocol):
 
     def claims(self, owner: str) -> set[str]: ...
 
-    def claim(self, owner: str, source: str, item_id: str, run: str | None, at: datetime) -> bool:
-        """Records that the player got this grant; False if they already had."""
+    def claim(self, owner: str, source: str, run: str | None, at: datetime, coins: int) -> bool:
+        """Records that the player got this grant (its coins); False if they already had."""
         ...
+
+    def add_coins(self, player: str, amount: int, reason: str, ref: str | None, at: datetime) -> int:
+        """Adds (or, negative, takes) coins and records the move; returns the balance. Raises NotEnoughCoins
+        (and changes nothing) if the balance would go below 0. The player's record must exist."""
+        ...
+
+    def coin_moves(self, player: str, limit: int) -> builtins.list[CoinMove]:
+        """The last first."""
+        ...
+
+    def pack(self, pack_id: str, lock: bool = False) -> Pack | None: ...
+
+    def add_pack(self, p: Pack) -> None: ...
+
+    def save_pack(self, p: Pack) -> None: ...
+
+    def packs_of(self, owner: str, status: PackStatus | None, limit: int) -> builtins.list[Pack]:
+        """Newest first."""
+        ...
+
+    def listing(self, listing_id: str, lock: bool = False) -> Listing | None: ...
+
+    def add_listing(self, listing: Listing) -> None:
+        """(An item has one open listing at most.)"""
+        ...
+
+    def save_listing(self, listing: Listing) -> None: ...
+
+    def listings(self, q: ListingQuery) -> builtins.list[Listing]:
+        """Listings in ``q.status`` that match the query, in its order (``q.offset`` skipped, ``q.limit`` at most)."""
+        ...
+
+    def open_listings_of(self, seller: str) -> int: ...
 
     def trade(self, trade_id: str, lock: bool = False) -> Trade | None: ...
 

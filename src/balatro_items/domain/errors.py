@@ -99,3 +99,56 @@ class GameClosed(DomainError):
 
 class TooManyGames(DomainError):
     code = "too_many_games"
+
+
+class NotEnoughCoins(DomainError):
+    code = "not_enough_coins"
+
+
+class BoosterNotFound(DomainError):
+    code = "booster_not_found"
+
+    def __init__(self, booster_id: str) -> None:
+        super().__init__(f"no booster {booster_id!r}")
+
+
+class PackNotFound(DomainError):
+    code = "pack_not_found"
+
+    def __init__(self, pack_id: str) -> None:
+        super().__init__(f"no pack {pack_id!r}")
+
+
+class PackOpened(DomainError):
+    """The pack's cards were chosen already."""
+
+    code = "pack_opened"
+
+
+class InvalidPick(DomainError):
+    """Not as many cards as the booster gives, or a card twice, or not one of the pack's."""
+
+    code = "invalid_pick"
+
+
+class ListingNotFound(DomainError):
+    code = "listing_not_found"
+
+    def __init__(self, listing_id: str) -> None:
+        super().__init__(f"no listing {listing_id!r}")
+
+
+class InvalidListing(DomainError):
+    """A price out of bounds, buying one's own item ..."""
+
+    code = "invalid_listing"
+
+
+class ListingClosed(DomainError):
+    """The item was sold or taken off the market."""
+
+    code = "listing_closed"
+
+
+class TooManyListings(DomainError):
+    code = "too_many_listings"

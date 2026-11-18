@@ -14,7 +14,25 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from balatro_items.domain import Edition, Game, GameStatus, Item, Mode, PlayerRecord, Trade, TradeStatus, Transfer
+from balatro_items.application.dto import ListingQuery
+from balatro_items.domain import (
+    CoinMove,
+    Edition,
+    Game,
+    GameStatus,
+    Item,
+    Listing,
+    ListingStatus,
+    Mode,
+    NotEnoughCoins,
+    Pack,
+    PackStatus,
+    PlayerNotFound,
+    PlayerRecord,
+    Trade,
+    TradeStatus,
+    Transfer,
+)
 
 
 @dataclass
@@ -23,9 +41,12 @@ class _State:
     items: dict[str, Item] = field(default_factory=dict)
     serials: dict[tuple[str, str], int] = field(default_factory=dict)
     transfers: list[Transfer] = field(default_factory=list)
-    claims: dict[str, dict[str, tuple[str, str | None, datetime]]] = field(default_factory=dict)
+    claims: dict[str, dict[str, tuple[str | None, datetime, int]]] = field(default_factory=dict)
     trades: dict[str, Trade] = field(default_factory=dict)
     games: dict[str, Game] = field(default_factory=dict)
+    coin_moves: list[CoinMove] = field(default_factory=list)
+    packs: dict[str, Pack] = field(default_factory=dict)
+    listings: dict[str, Listing] = field(default_factory=dict)
 
 
 class MemoryUnit:
@@ -37,7 +58,10 @@ class MemoryUnit:
         return copy.copy(p) if p else None
 
     def save_player(self, p: PlayerRecord) -> None:
-        self.s.players[p.id] = copy.copy(p)
+        saved = self.s.players.get(p.id)
+        p = copy.copy(p)
+        p.coins = saved.coins if saved else 0  # (coins change only through add_coins)
+        self.s.players[p.id] = p
 
     def find_players(self, query: str, limit: int) -> list[PlayerRecord]:
         q = query.lower()
@@ -56,7 +80,7 @@ class MemoryUnit:
         return [copy.copy(it) for it in sorted(mine, key=lambda it: (it.acquired_at, it.id), reverse=True)]
 
     def add_item(self, item: Item) -> Item:
-        k = (item.key, item.edition.value)
+        k = (item.variant, item.edition.value)
         self.s.serials[k] = self.s.serials.get(k, 0) + 1
         item = copy.copy(item)
         item.serial = self.s.serials[k]
@@ -66,8 +90,8 @@ class MemoryUnit:
     def save_item(self, item: Item) -> None:
         self.s.items[item.id] = copy.copy(item)
 
-    def minted(self, key: str, edition: Edition) -> int:
-        return self.s.serials.get((key, edition.value), 0)
+    def minted(self, variant: str, edition: Edition) -> int:
+        return self.s.serials.get((variant, edition.value), 0)
 
     def add_transfer(self, t: Transfer) -> None:
         self.s.transfers.append(t)
@@ -78,12 +102,74 @@ class MemoryUnit:
     def claims(self, owner: str) -> set[str]:
         return set(self.s.claims.get(owner, {}))
 
-    def claim(self, owner: str, source: str, item_id: str, run: str | None, at: datetime) -> bool:
+    def claim(self, owner: str, source: str, run: str | None, at: datetime, coins: int) -> bool:
         mine = self.s.claims.setdefault(owner, {})
         if source in mine:
             return False
-        mine[source] = (item_id, run, at)
+        mine[source] = (run, at, coins)
         return True
+
+    def add_coins(self, player: str, amount: int, reason: str, ref: str | None, at: datetime) -> int:
+        p = self.s.players.get(player)
+        if p is None:
+            raise PlayerNotFound(player)
+        if p.coins + amount < 0:
+            raise NotEnoughCoins(f"this takes {-amount:,} coins and you have {p.coins:,}")
+        p.coins += amount
+        self.s.coin_moves.append(CoinMove(player=player, amount=amount, balance=p.coins, reason=reason, ref=ref, at=at))
+        return p.coins
+
+    def coin_moves(self, player: str, limit: int) -> builtins.list[CoinMove]:
+        return [m for m in reversed(self.s.coin_moves) if m.player == player][:limit]
+
+    def pack(self, pack_id: str, lock: bool = False) -> Pack | None:
+        p = self.s.packs.get(pack_id)
+        return copy.deepcopy(p) if p else None
+
+    def add_pack(self, p: Pack) -> None:
+        self.s.packs[p.id] = copy.deepcopy(p)
+
+    def save_pack(self, p: Pack) -> None:
+        self.s.packs[p.id] = copy.deepcopy(p)
+
+    def packs_of(self, owner: str, status: PackStatus | None, limit: int) -> builtins.list[Pack]:
+        found = [p for p in self.s.packs.values() if p.owner == owner and (status is None or p.status is status)]
+        found.sort(key=lambda p: (p.created_at, p.id), reverse=True)
+        return [copy.deepcopy(p) for p in found[:limit]]
+
+    def listing(self, listing_id: str, lock: bool = False) -> Listing | None:
+        x = self.s.listings.get(listing_id)
+        return copy.copy(x) if x else None
+
+    def add_listing(self, x: Listing) -> None:
+        if x.status is ListingStatus.OPEN and any(
+                o.item == x.item and o.status is ListingStatus.OPEN for o in self.s.listings.values()):
+            raise RuntimeError(f"item {x.item!r} has an open listing")  # (PostgreSQL's unique index)
+        self.s.listings[x.id] = copy.copy(x)
+
+    def save_listing(self, x: Listing) -> None:
+        self.s.listings[x.id] = copy.copy(x)
+
+    def listings(self, q: ListingQuery) -> builtins.list[Listing]:
+        def wanted(x: Listing) -> bool:
+            it = self.s.items.get(x.item)
+            return (it is not None and (q.status is None or x.status is q.status)
+                    and (q.kind is None or it.kind is q.kind) and (q.rarity is None or it.rarity == q.rarity)
+                    and (q.edition is None or it.edition is q.edition) and (q.keys is None or it.key in q.keys)
+                    and (q.variant is None or it.variant == q.variant) and (q.seller is None or x.seller == q.seller)
+                    and (q.buyer is None or x.buyer == q.buyer)
+                    and (q.player is None or q.player in (x.seller, x.buyer)))
+
+        found = sorted((x for x in self.s.listings.values() if wanted(x)), key=lambda x: (x.updated_at, x.id),
+                       reverse=True)
+        if q.sort == "price":
+            found.sort(key=lambda x: x.price)
+        elif q.sort == "-price":
+            found.sort(key=lambda x: -x.price)
+        return [copy.copy(x) for x in found[q.offset:q.offset + q.limit]]
+
+    def open_listings_of(self, seller: str) -> int:
+        return sum(1 for x in self.s.listings.values() if x.seller == seller and x.status is ListingStatus.OPEN)
 
     def trade(self, trade_id: str, lock: bool = False) -> Trade | None:
         t = self.s.trades.get(trade_id)

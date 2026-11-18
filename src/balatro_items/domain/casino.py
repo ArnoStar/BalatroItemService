@@ -17,8 +17,9 @@ A coinflip or a dice game may be a **challenge**: only the player it names may
 join it (everyone may still watch it, as every game).
 
 A player's chance is the value of their items over the value of the pot. An
-item's value is its odds, one in how many drops of the standard table it is
-(``drops.odds``), so a rarer item weighs more. It is fixed when it is staked.
+item's value is its odds, one in how many cards of its kind's standard table
+it is (``boosters.Pools.odds``: its value in coins), so a rarer item weighs
+more. It is fixed when it is staked.
 
 **Provably fair.** Each game has a secret server seed whose SHA-256 is shown
 from the start, and each entry brings its player's seed. The draw is

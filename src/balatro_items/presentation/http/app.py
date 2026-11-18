@@ -15,18 +15,20 @@ from balatro_items import __version__
 from balatro_items.application.use_cases import UseCases
 
 from . import errors
-from .routes import casino, items, meta, trades
+from .routes import casino, items, meta, shop, trades
 
 DESCRIPTION = """
-Collectible items of Balatro: jokers and tags with the game's editions,
-linked to the players' accounts. They are found by playing (a few a week,
-and one for each new deck and stake won: `GET /v1/odds`), shown on the title
-screen and profile, traded between players, and staked in the casino
-(coinflips, dice and a jackpot, between players only; live at `/v1/casino/live`).
-They change nothing in a run.
+Collectible items of Balatro: the game's cards (jokers, tarot, planet and
+spectral cards, playing cards) with the upgrades the game gives them, linked
+to the players' accounts. Playing earns **coins** (a few a week, and some for
+each new deck and stake won: `GET /v1/odds`); coins buy **boosters**, packs of
+cards to choose from, and items other players sell on the **market**. Items
+are shown on the title screen and profile, traded between players, sold, and
+staked in the casino (coinflips, dice and a jackpot, between players only;
+live at `/v1/casino/live`). They change nothing in a run.
 
-With sign-in on, every route but `/health` and `/v1/odds` needs an access
-token from the identity service.
+With sign-in on, every route but `/health`, `/v1/odds`, `/v1/boosters` and
+`/v1/casino/rules` needs an access token from the identity service.
 """
 
 
@@ -60,6 +62,7 @@ def create_app(use_cases: UseCases, cors_origins: Sequence[str] = ("*",), heartb
     app.include_router(meta.router)
     app.include_router(items.router)
     app.include_router(trades.router)
+    app.include_router(shop.router)
     app.include_router(casino.router)
 
     @app.get("/", include_in_schema=False)

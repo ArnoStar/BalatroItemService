@@ -12,7 +12,7 @@ from typing import Any
 
 from balatro_items.application.dto import NewBet, Player
 from balatro_items.domain import Side
-from tests.api.test_http import ADMIN, ALICE, BOB, CAROL, find, win
+from tests.api.test_http import ADMIN, ALICE, BOB, CAROL, find, open_booster, win
 from tests.conftest import World, make_world
 from tests.tokens import token
 
@@ -181,8 +181,8 @@ def test_a_due_pot_is_drawn_before_the_next_opens(world: World) -> None:
 def test_the_casino_opens_after_a_first_win(world: World) -> None:
     c = world.client
     world.runs.add("alice", "r1", ante=5)
-    find(world, ALICE)  # an item, but no win
-    a = c.get("/v1/me/items", headers=ALICE).json()[0]["id"]
+    find(world, ALICE)
+    a = open_booster(world, ALICE)[0]["id"]  # an item, but no win
     out_of_hold(world)
     r = c.post("/v1/casino/coinflips", headers=ALICE, json={"items": [a]})
     assert r.status_code == 403 and r.json()["code"] == "trading_locked"

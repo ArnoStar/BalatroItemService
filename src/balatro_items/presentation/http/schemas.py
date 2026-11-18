@@ -4,8 +4,19 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from balatro_items.application.dto import Gift, NewBet, NewTrade
-from balatro_items.domain import MAX_CHANCE, MAX_SIDE, MAX_STAKE, MIN_CHANCE, Edition, Side
+from balatro_items.application.dto import CoinGift, Gift, NewBet, NewListing, NewTrade
+from balatro_items.domain import (
+    ENHANCEMENTS,
+    MAX_CHANCE,
+    MAX_PRICE,
+    MAX_SIDE,
+    MAX_STAKE,
+    MIN_CHANCE,
+    MIN_PRICE,
+    SEALS,
+    Edition,
+    Side,
+)
 
 ItemIds = list[str]
 
@@ -30,12 +41,40 @@ class TradeRequest(BaseModel):
 class GiftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     to: str = Field(description="The player's account id (they have used the items once)")
-    key: str = Field(description="A joker or tag key of the game's catalog (j_joker, tag_negative ...)")
+    key: str = Field(description="A card of the game's catalog: a joker, tarot, planet or spectral card (j_joker, "
+                                 "c_fool ...), or a playing card (S_A ...)")
     edition: Edition = Edition.BASE
     stake: int | None = Field(None, ge=1, le=8, description="A stake sticker (1 White ... 8 Gold)")
+    enhancement: str | None = Field(None, pattern=f"^({'|'.join(ENHANCEMENTS)})$", description="A playing card's")
+    seal: str | None = Field(None, pattern=f"^({'|'.join(SEALS)})$", description="A playing card's")
 
     def to_dto(self) -> Gift:
-        return Gift(to=self.to, key=self.key, edition=self.edition, stake=self.stake)
+        return Gift(to=self.to, key=self.key, edition=self.edition, stake=self.stake, enhancement=self.enhancement,
+                    seal=self.seal)
+
+
+class CoinGiftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    to: str = Field(description="The player's account id (they have used the items once)")
+    coins: int = Field(description="Coins to give (negative: to take back, down to 0)")
+    note: str = Field("", max_length=200, description="What for (in their coins' history)")
+
+    def to_dto(self) -> CoinGift:
+        return CoinGift(to=self.to, coins=self.coins, note=self.note)
+
+
+class PickRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    picks: list[int] = Field(min_length=1, max_length=4, description="The cards chosen: their indexes in the pack")
+
+
+class ListingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    item: str = Field(description="Your item (out of its trade hold, not staked)")
+    price: int = Field(ge=MIN_PRICE, le=MAX_PRICE, description="Coins")
+
+    def to_dto(self) -> NewListing:
+        return NewListing(item=self.item, price=self.price)
 
 
 class BetRequest(BaseModel):

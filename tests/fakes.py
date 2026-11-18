@@ -8,7 +8,16 @@ from datetime import UTC, datetime, timedelta
 
 from balatro_items.application.dto import CasinoEvent, Player
 from balatro_items.application.errors import GameApiUnavailable
-from balatro_items.domain import TAG_RARITY, Kind, Rarity, RunRecord, Template
+from balatro_items.domain import (
+    CONSUMABLE_RARITY,
+    ENHANCEMENTS,
+    SEALS,
+    Kind,
+    Rarity,
+    RunRecord,
+    Template,
+    playing_cards,
+)
 from balatro_items.infrastructure.feed import LocalFeed
 
 # a Wednesday
@@ -17,7 +26,10 @@ T0 = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
 JOKERS = {Rarity.COMMON: ["j_joker", "j_greedy_joker", "j_lusty_joker", "j_wrathful_joker"],
           Rarity.UNCOMMON: ["j_four_fingers", "j_mime"], Rarity.RARE: ["j_dna", "j_blueprint"],
           Rarity.LEGENDARY: ["j_caino", "j_perkeo"]}
-TAGS = ["tag_economy", "tag_negative", "tag_foil", "tag_d_six"]
+CONSUMABLES = {Kind.TAROT: ["c_magician", "c_empress", "c_hermit", "c_fool"],
+               Kind.PLANET: ["c_pluto", "c_mercury", "c_earth", "c_eris"],
+               Kind.SPECTRAL: ["c_familiar", "c_aura", "c_hex", "c_soul"]}
+CARDS = [("S_A", "Ace of Spades"), ("H_K", "King of Hearts"), ("D_2", "2 of Diamonds"), ("C_T", "10 of Clubs")]
 
 
 class FakeCatalog:
@@ -30,9 +42,14 @@ class FakeCatalog:
         out = [Template(kind=Kind.JOKER, key=k, name=k.removeprefix("j_").replace("_", " ").title(), rarity=r,
                         sprite={"atlas": "Joker", "pos": {"x": i, "y": int(r)}})
                for r, keys in JOKERS.items() for i, k in enumerate(keys)]
-        out += [Template(kind=Kind.TAG, key=k, name=k.removeprefix("tag_").title() + " Tag",
-                         rarity=TAG_RARITY.get(k, Rarity.COMMON), sprite={"atlas": "tags", "pos": {"x": i, "y": 0}})
-                for i, k in enumerate(TAGS)]
+        out += [Template(kind=kind, key=k, name=k.removeprefix("c_").replace("_", " ").title(),
+                         rarity=CONSUMABLE_RARITY.get(k, Rarity.COMMON),
+                         sprite={"atlas": "Tarot", "pos": {"x": i, "y": 0}})
+                for kind, keys in CONSUMABLES.items() for i, k in enumerate(keys)]
+        fronts = ((k, name, {"atlas": "cards_1", "pos": {"x": i, "y": 0}}) for i, (k, name) in enumerate(CARDS))
+        out += playing_cards(fronts, {"atlas": "centers", "pos": {"x": 1, "y": 0}},
+                             {e: {"atlas": "centers", "pos": {"x": i, "y": 1}} for i, e in enumerate(ENHANCEMENTS)},
+                             {s: {"atlas": "centers", "pos": {"x": i, "y": 4}} for i, s in enumerate(SEALS)})
         return out
 
 
