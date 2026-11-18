@@ -10,7 +10,9 @@ never plays it. It has only the upgrades the game can give its kind of card:
 - a **playing card**: an enhancement (``m_bonus`` ... ``m_lucky``), a seal
   (``Gold``, ``Red``, ``Blue``, ``Purple``) and an edition but negative.
 
-Every item is numbered among the items of the same card, upgrades and edition
+Every item has a condition (condition.py: how well kept its card is, which
+its value follows: value.py), and is numbered among the items of the same
+card, upgrades and edition
 (``serial``: #1 was the first made; ``variant`` names the card and its
 upgrades), remembers where it came from (``source``: a booster, a gift, or
 before boosters a grant of a run, ``source_run``) and, when it came from a
@@ -134,6 +136,7 @@ class Item:
     created_at: datetime
     acquired_at: datetime  # when its owner got it
     tradable_at: datetime  # the end of its trade hold
+    condition: float  # how well kept its card is, 0 (ruined) to 1 (pristine): condition.py
     staked: str | None = None  # the casino game it is staked in (it can't change hands until the game ends)
     enhancement: str | None = None  # a playing card's
     seal: str | None = None  # a playing card's

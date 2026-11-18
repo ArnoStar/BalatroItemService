@@ -84,12 +84,17 @@ from balatro_items.domain import (
     choose,
     draw,
     earned,
+    grade,
+    item_mint_value,
+    item_value,
     join_duel,
     join_jackpot,
     join_range,
+    mint_value,
     next_week,
     parts,
     pay_out,
+    roll_condition,
     roll_pack,
     sell,
     swap,
@@ -98,6 +103,7 @@ from balatro_items.domain import (
     variant,
     week_of,
     winner_chance,
+    worth,
 )
 
 from .dto import (
@@ -259,7 +265,9 @@ class Views:
                 source=it.source, source_run=it.source_run, found_at=it.created_at, acquired_at=it.acquired_at,
                 tradable_at=it.tradable_at, tradable=it.tradable(now), staked=it.staked,
                 sprite=t.sprite if t else None, enhancement=it.enhancement, seal=it.seal, variant=it.variant,
-                listed=it.listed, price=listing.price if listing else None, booster=it.booster))
+                listed=it.listed, price=listing.price if listing else None, booster=it.booster,
+                condition=it.condition, grade=grade(it.condition), mint_value=item_mint_value(it),
+                value=item_value(it)))
         return out
 
     def item(self, u: Unit, item: Item) -> ItemView:
@@ -287,10 +295,13 @@ class Views:
     def choice(self, u: Unit, index: int, c: Choice, pools: Pools) -> ChoiceView:
         v = variant(c.key, c.enhancement, c.seal)
         t = pools.by_variant.get(v)
+        mint = mint_value(c.kind, c.rarity, c.edition, c.enhancement, c.seal)
         return ChoiceView(index=index, kind=c.kind, key=c.key, name=t.name if t else c.key, rarity=c.rarity,
                           edition=c.edition, enhancement=c.enhancement, seal=c.seal, variant=v,
                           odds=pools.odds(t, c.edition) if t else 0, minted=u.minted(v, c.edition),
-                          sprite=t.sprite if t else None)
+                          sprite=t.sprite if t else None, condition=c.condition,
+                          grade=grade(c.condition) if c.condition is not None else None, mint_value=mint,
+                          value=worth(mint, c.condition) if c.condition is not None else 0)
 
     def pack(self, u: Unit, p: Pack) -> PackView:
         pools = self.pools()
@@ -651,7 +662,8 @@ class GiveItem:
             item = u.add_item(Item(
                 id=d.ids.new_id(), kind=template.kind, key=template.key, edition=gift.edition, rarity=template.rarity,
                 stake=gift.stake, serial=0, owner=gift.to, source="gift", source_run=None, created_at=now,
-                acquired_at=now, tradable_at=now + d.hold, enhancement=template.enhancement, seal=template.seal))
+                acquired_at=now, tradable_at=now + d.hold, enhancement=template.enhancement, seal=template.seal,
+                condition=gift.condition if gift.condition is not None else roll_condition(d.rng)))
             u.add_transfer(Transfer(item=item.id, from_owner=None, to_owner=gift.to, at=now))
             log.info("admin %s gave %s (%s) to %s", admin.id, item.variant, item.edition, gift.to)
             return self.views.item(u, item)
@@ -774,7 +786,8 @@ class ChoosePack:
                 item = u.add_item(Item(
                     id=d.ids.new_id(), kind=c.kind, key=c.key, edition=c.edition, rarity=c.rarity, stake=None,
                     serial=0, owner=player.id, source="booster", source_run=None, created_at=now, acquired_at=now,
-                    tradable_at=now + d.hold, enhancement=c.enhancement, seal=c.seal, booster=pack.booster))
+                    tradable_at=now + d.hold, enhancement=c.enhancement, seal=c.seal, booster=pack.booster,
+                    condition=c.condition if c.condition is not None else roll_condition(d.rng)))
                 u.add_transfer(Transfer(item=item.id, from_owner=None, to_owner=player.id, at=now))
                 made.append(item.id)
                 log.info("player %s chose %s (%s) from %s", player.id, item.variant, item.edition, pack.booster)
@@ -957,7 +970,8 @@ class Casino:
             self.deps.feed.publish(CasinoEvent("game", v))
 
     def stake(self, u: Unit, player: Player, bet: NewBet, game_id: str, pools: Pools, now: datetime) -> Entry:
-        """The player's entry: their items (theirs, out of their trade hold) staked in the game, at their value."""
+        """The player's entry: their items (theirs, out of their trade hold) staked in the game, at their value
+        (value.py: their card, upgrades and condition)."""
         d = self.deps
         seed = bet.seed or d.seeds.seed()[:16]
         check_bet(bet.items, seed)
@@ -969,11 +983,9 @@ class Casino:
         value = 0
         for i in bet.items:
             item = items[i]
-            t = pools.by_variant.get(item.variant)
-            worth = pools.odds(t, item.edition) if t else 0
-            if worth <= 0:
+            if item.variant not in pools.by_variant:
                 raise InvalidBet(f"item {i!r} has no value for now: try again later")
-            value += worth
+            value += item_value(item)
             item.staked = game_id
             u.save_item(item)
         return Entry(player=player.id, items=tuple(bet.items), value=value, seed=seed, at=now)

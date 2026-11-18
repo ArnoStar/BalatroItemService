@@ -230,10 +230,19 @@ MIGRATIONS: tuple[str, ...] = (
     DELETE FROM transfers WHERE item IN (SELECT id FROM retired_tags);
     DELETE FROM items WHERE id IN (SELECT id FROM retired_tags);
     """,
+    # 5: an item's condition (domain/condition.py), from 0 (ruined) to 1 (pristine); the items made before get one at
+    # random, drawn as a new item's (the Kumaraswamy distribution's inverse, a = 1.5, b = 5): good ones rare
+    """
+    ALTER TABLE items ADD COLUMN condition DOUBLE PRECISION;
+    UPDATE items SET condition = round(power(1 - power(1 - random(), 1.0 / 5), 1.0 / 1.5)::numeric, 6)::float8;
+    ALTER TABLE items ALTER COLUMN condition SET NOT NULL;
+    ALTER TABLE items ADD CONSTRAINT items_condition CHECK (condition >= 0 AND condition <= 1);
+    """,
 )
 
 ITEM_COLUMNS = ("id", "kind", "key", "edition", "rarity", "stake", "serial", "owner", "source", "source_run",
-                "created_at", "acquired_at", "tradable_at", "staked", "enhancement", "seal", "listed", "booster")
+                "created_at", "acquired_at", "tradable_at", "staked", "enhancement", "seal", "listed", "booster",
+                "condition")
 SELECT_ITEMS = sql.SQL("SELECT {} FROM items").format(sql.SQL(", ").join(sql.Identifier(c) for c in ITEM_COLUMNS))
 SELECT_TRADES = ("SELECT id, sender, recipient, give, take, message, status, created_at, updated_at, expires_at "
                  "FROM trades")
@@ -267,7 +276,8 @@ def _item(r: DictRow) -> Item:
                 rarity=Rarity(r["rarity"]), stake=r["stake"], serial=r["serial"], owner=r["owner"],
                 source=r["source"], source_run=r["source_run"], created_at=r["created_at"],
                 acquired_at=r["acquired_at"], tradable_at=r["tradable_at"], staked=r["staked"],
-                enhancement=r["enhancement"], seal=r["seal"], listed=r["listed"], booster=r["booster"])
+                enhancement=r["enhancement"], seal=r["seal"], listed=r["listed"], booster=r["booster"],
+                condition=float(r["condition"]))
 
 
 def _player(r: DictRow) -> PlayerRecord:
@@ -277,7 +287,9 @@ def _player(r: DictRow) -> PlayerRecord:
 
 def _pack(r: DictRow) -> Pack:
     choices = [Choice(kind=Kind(c["kind"]), key=c["key"], rarity=Rarity(c["rarity"]), edition=Edition(c["edition"]),
-                      enhancement=c.get("enhancement"), seal=c.get("seal")) for c in r["choices"]]
+                      enhancement=c.get("enhancement"), seal=c.get("seal"),
+                      condition=float(c["condition"]) if c.get("condition") is not None else None)
+               for c in r["choices"]]
     return Pack(id=r["id"], owner=r["owner"], booster=r["booster"], price=r["price"], picks=r["picks"],
                 choices=choices, status=PackStatus(r["status"]), created_at=r["created_at"], opened_at=r["opened_at"],
                 chosen=tuple(r["chosen"]), items=tuple(r["items"]))
@@ -285,7 +297,7 @@ def _pack(r: DictRow) -> Pack:
 
 def _pack_row(p: Pack) -> dict[str, Any]:
     choices = [{"kind": c.kind.value, "key": c.key, "rarity": int(c.rarity), "edition": c.edition.value,
-                "enhancement": c.enhancement, "seal": c.seal} for c in p.choices]
+                "enhancement": c.enhancement, "seal": c.seal, "condition": c.condition} for c in p.choices]
     return {"id": p.id, "owner": p.owner, "booster": p.booster, "price": p.price, "picks": p.picks,
             "choices": Jsonb(choices), "status": p.status.value, "chosen": list(p.chosen), "items": list(p.items),
             "created_at": p.created_at, "opened_at": p.opened_at}
