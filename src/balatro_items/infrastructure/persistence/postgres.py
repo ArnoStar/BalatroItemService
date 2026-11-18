@@ -44,6 +44,7 @@ from balatro_items.domain import (
     Trade,
     TradeStatus,
     Transfer,
+    Upgrade,
 )
 
 MIGRATIONS: tuple[str, ...] = (
@@ -238,11 +239,51 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE items ALTER COLUMN condition SET NOT NULL;
     ALTER TABLE items ADD CONSTRAINT items_condition CHECK (condition >= 0 AND condition <= 1);
     """,
+    # 6: the upgrade (domain/upgrade.py): the items put in are destroyed (kept, with their history), the player's next
+    # server seed is committed to
+    """
+    ALTER TABLE items ADD COLUMN destroyed_at TIMESTAMPTZ, ADD COLUMN destroyed_in TEXT;
+    ALTER TABLE players ADD COLUMN upgrade_seed TEXT;
+    CREATE TABLE upgrades (
+        id TEXT PRIMARY KEY,
+        player TEXT NOT NULL,
+        item TEXT NOT NULL,
+        item_value BIGINT NOT NULL,
+        multiplier DOUBLE PRECISION NOT NULL,
+        chance_ppm INTEGER NOT NULL,
+        target BIGINT NOT NULL,
+        low BIGINT NOT NULL,
+        high BIGINT NOT NULL,
+        server_seed TEXT NOT NULL,
+        seed TEXT NOT NULL,
+        roll INTEGER NOT NULL,
+        prize TEXT,
+        prize_value BIGINT,
+        created_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE INDEX upgrades_created ON upgrades (created_at DESC);
+    CREATE INDEX upgrades_player ON upgrades (player, created_at DESC);
+    """,
+    # 7: conditions are kinder (domain/condition.py: a = 3, b = 5.2, a median of 50%): every condition drawn before
+    # (a = 1.5, b = 5) moves to the new distribution keeping its rank, new = F_new^-1(F_old(old)) =
+    # (1 - (1 - old^1.5)^(5/5.2))^(1/3); the cards of the packs not chosen from yet too
+    """
+    CREATE FUNCTION pg_temp.kinder(c DOUBLE PRECISION) RETURNS DOUBLE PRECISION AS $$
+        SELECT round(power(1 - power(1 - power(c, 1.5), 5.0 / 5.2), 1.0 / 3)::numeric, 6)::float8
+    $$ LANGUAGE sql IMMUTABLE;
+    UPDATE items SET condition = pg_temp.kinder(condition);
+    UPDATE packs SET choices = (
+        SELECT jsonb_agg(CASE WHEN jsonb_typeof(c -> 'condition') = 'number'
+                              THEN jsonb_set(c, '{condition}', to_jsonb(pg_temp.kinder((c ->> 'condition')::float8)))
+                              ELSE c END ORDER BY n)
+        FROM jsonb_array_elements(choices) WITH ORDINALITY AS t (c, n))
+    WHERE status = 'open' AND jsonb_array_length(choices) > 0;
+    """,
 )
 
 ITEM_COLUMNS = ("id", "kind", "key", "edition", "rarity", "stake", "serial", "owner", "source", "source_run",
                 "created_at", "acquired_at", "tradable_at", "staked", "enhancement", "seal", "listed", "booster",
-                "condition")
+                "condition", "destroyed_at", "destroyed_in")
 SELECT_ITEMS = sql.SQL("SELECT {} FROM items").format(sql.SQL(", ").join(sql.Identifier(c) for c in ITEM_COLUMNS))
 SELECT_TRADES = ("SELECT id, sender, recipient, give, take, message, status, created_at, updated_at, expires_at "
                  "FROM trades")
@@ -277,12 +318,13 @@ def _item(r: DictRow) -> Item:
                 source=r["source"], source_run=r["source_run"], created_at=r["created_at"],
                 acquired_at=r["acquired_at"], tradable_at=r["tradable_at"], staked=r["staked"],
                 enhancement=r["enhancement"], seal=r["seal"], listed=r["listed"], booster=r["booster"],
-                condition=float(r["condition"]))
+                condition=float(r["condition"]), destroyed_at=r["destroyed_at"], destroyed_in=r["destroyed_in"])
 
 
 def _player(r: DictRow) -> PlayerRecord:
     return PlayerRecord(id=r["id"], name=r["name"], has_won=r["has_won"], showcase=r["showcase"],
-                        created_at=r["created_at"], synced_at=r["synced_at"], coins=int(r["coins"]))
+                        created_at=r["created_at"], synced_at=r["synced_at"], coins=int(r["coins"]),
+                        upgrade_seed=r["upgrade_seed"])
 
 
 def _pack(r: DictRow) -> Pack:
@@ -301,6 +343,14 @@ def _pack_row(p: Pack) -> dict[str, Any]:
     return {"id": p.id, "owner": p.owner, "booster": p.booster, "price": p.price, "picks": p.picks,
             "choices": Jsonb(choices), "status": p.status.value, "chosen": list(p.chosen), "items": list(p.items),
             "created_at": p.created_at, "opened_at": p.opened_at}
+
+
+def _upgrade(r: DictRow) -> Upgrade:
+    return Upgrade(id=r["id"], player=r["player"], item=r["item"], item_value=int(r["item_value"]),
+                   multiplier=float(r["multiplier"]), chance_ppm=r["chance_ppm"], target=int(r["target"]),
+                   low=int(r["low"]), high=int(r["high"]), server_seed=r["server_seed"], seed=r["seed"],
+                   roll=r["roll"], created_at=r["created_at"], prize=r["prize"],
+                   prize_value=int(r["prize_value"]) if r["prize_value"] is not None else None)
 
 
 def _listing(r: DictRow) -> Listing:
@@ -344,10 +394,11 @@ class PostgresUnit:
 
     def save_player(self, p: PlayerRecord) -> None:
         self.c.execute(
-            "INSERT INTO players (id, name, has_won, showcase, created_at, synced_at) VALUES (%s, %s, %s, %s, %s, %s) "
+            "INSERT INTO players (id, name, has_won, showcase, created_at, synced_at, upgrade_seed) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) "
             "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, has_won = EXCLUDED.has_won, "
-            "showcase = EXCLUDED.showcase, synced_at = EXCLUDED.synced_at",
-            (p.id, p.name, p.has_won, p.showcase, p.created_at, p.synced_at))
+            "showcase = EXCLUDED.showcase, synced_at = EXCLUDED.synced_at, upgrade_seed = EXCLUDED.upgrade_seed",
+            (p.id, p.name, p.has_won, p.showcase, p.created_at, p.synced_at, p.upgrade_seed))
 
     def find_players(self, query: str, limit: int) -> list[PlayerRecord]:
         pattern = query.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -366,7 +417,7 @@ class PostgresUnit:
         return {r["id"]: _item(r) for r in self.c.execute(q, (list(ids),)).fetchall()}
 
     def items_of(self, owner: str) -> builtins.list[Item]:
-        q = SELECT_ITEMS + sql.SQL(" WHERE owner = %s ORDER BY acquired_at DESC, id DESC")
+        q = SELECT_ITEMS + sql.SQL(" WHERE owner = %s AND destroyed_at IS NULL ORDER BY acquired_at DESC, id DESC")
         return [_item(r) for r in self.c.execute(q, (owner,)).fetchall()]
 
     def add_item(self, item: Item) -> Item:
@@ -384,9 +435,10 @@ class PostgresUnit:
         return item
 
     def save_item(self, item: Item) -> None:
-        self.c.execute("UPDATE items SET owner = %s, acquired_at = %s, tradable_at = %s, staked = %s, listed = %s "
-                       "WHERE id = %s",
-                       (item.owner, item.acquired_at, item.tradable_at, item.staked, item.listed, item.id))
+        self.c.execute("UPDATE items SET owner = %s, acquired_at = %s, tradable_at = %s, staked = %s, listed = %s, "
+                       "destroyed_at = %s, destroyed_in = %s WHERE id = %s",
+                       (item.owner, item.acquired_at, item.tradable_at, item.staked, item.listed, item.destroyed_at,
+                        item.destroyed_in, item.id))
 
     def minted(self, variant: str, edition: Edition) -> int:
         row = self.c.execute("SELECT last FROM serials WHERE key = %s AND edition = %s",
@@ -494,6 +546,28 @@ class PostgresUnit:
         row = self.c.execute("SELECT count(*) AS n FROM listings WHERE seller = %s AND status = 'open'",
                              (seller,)).fetchone()
         return int(row["n"]) if row else 0
+
+    def add_upgrade(self, up: Upgrade) -> None:
+        columns = ("id", "player", "item", "item_value", "multiplier", "chance_ppm", "target", "low", "high",
+                   "server_seed", "seed", "roll", "prize", "prize_value", "created_at")
+        self.c.execute(sql.SQL("INSERT INTO upgrades ({}) VALUES ({})").format(
+            sql.SQL(", ").join(sql.Identifier(c) for c in columns),
+            sql.SQL(", ").join(sql.Placeholder(c) for c in columns)),
+            {c: getattr(up, c) for c in columns})
+
+    def upgrade(self, upgrade_id: str) -> Upgrade | None:
+        row = self.c.execute("SELECT * FROM upgrades WHERE id = %s", (upgrade_id,)).fetchone()
+        return _upgrade(row) if row else None
+
+    def upgrades(self, player: str | None, limit: int, before: datetime | None = None) -> builtins.list[Upgrade]:
+        cond, args = ["TRUE"], {"n": limit, "p": player, "b": before}
+        if player is not None:
+            cond.append("player = %(p)s")
+        if before is not None:
+            cond.append("created_at < %(b)s")
+        rows = self.c.execute(f"SELECT * FROM upgrades WHERE {' AND '.join(cond)} ORDER BY created_at DESC, id DESC "
+                              "LIMIT %(n)s", args).fetchall()
+        return [_upgrade(r) for r in rows]
 
     def trade(self, trade_id: str, lock: bool = False) -> Trade | None:
         row = self.c.execute(SELECT_TRADES + " WHERE id = %s" + (" FOR UPDATE" if lock else ""),

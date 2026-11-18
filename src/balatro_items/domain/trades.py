@@ -75,7 +75,7 @@ def check_items(owner: str, ids: Sequence[str], items: dict[str, Item], now: dat
     (``moved``: say that the offer is out of date)."""
     for i in ids:
         item = items.get(i)
-        if item is None or item.owner != owner:
+        if item is None or item.owner != owner or item.destroyed_at is not None:
             if moved:
                 raise ItemsMoved("an item of this offer has changed hands since")
             raise NotOwner(f"item {i!r} isn't this player's")

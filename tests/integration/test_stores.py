@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+from psycopg.types.json import Jsonb
 
 from balatro_items.application.dto import ListingQuery
 from balatro_items.domain import (
@@ -365,7 +366,7 @@ def test_migration_4_gives_the_tags_back_in_coins(pg) -> None:  # type: ignore[n
     with psycopg.connect(PG_URL, autocommit=True) as conn:  # type: ignore[arg-type]
         conn.execute(pgsql.SQL("SET search_path TO {}").format(pgsql.SQL(search_path)))
         for table in ("schema_migrations", "players", "serials", "items", "transfers", "claims", "trades", "games",
-                      "coin_moves", "packs", "listings"):
+                      "coin_moves", "packs", "listings", "upgrades"):
             conn.execute(pgsql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(pgsql.Identifier(table)))
         conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL "
                      "DEFAULT now())")
@@ -419,5 +420,47 @@ def test_migration_4_gives_the_tags_back_in_coins(pg) -> None:  # type: ignore[n
             # migration 5: every item of before has a condition, at random
             conditions = [i.condition for p in ("p1", "p2", "p3") for i in u.items_of(p)]
             assert conditions and all(0 <= c <= 1 for c in conditions)
+    finally:
+        store.close()
+
+
+def test_migration_7_moves_the_conditions_of_before_keeping_their_rank(pg) -> None:  # type: ignore[no-untyped-def]
+    """Conditions drawn on the old curve (a = 1.5, b = 5) move to the kinder one (a = 3, b = 5.2): the old median
+    becomes the new one, and the order stays."""
+    import psycopg
+    from psycopg import sql as pgsql
+
+    from balatro_items.infrastructure.persistence import postgres
+    from tests.conftest import PG_URL
+
+    store = pg()
+    with store._pool.connection() as conn:
+        search_path = conn.execute("SHOW search_path").fetchone()["search_path"]  # type: ignore[index]
+    store.close()
+    with psycopg.connect(PG_URL, autocommit=True) as conn:  # type: ignore[arg-type]
+        conn.execute(pgsql.SQL("SET search_path TO {}").format(pgsql.SQL(search_path)))
+        conn.execute("DELETE FROM schema_migrations WHERE version = 7")
+        conn.execute("INSERT INTO players (id, name, has_won, showcase, created_at) VALUES ('p1', 'A', true, null, %s)",
+                     (T0,))
+        old = {"i0": 0.0, "i1": 0.1, "i2": 0.256, "i3": 0.6, "i4": 0.8, "i5": 1.0}
+        for iid, c in old.items():
+            conn.execute("INSERT INTO items (id, kind, key, edition, rarity, serial, owner, source, created_at, "
+                         "acquired_at, tradable_at, condition) VALUES (%s, 'joker', 'j_joker', 'base', 1, %s, 'p1', "
+                         "'gift', %s, %s, %s, %s)", (iid, int(iid[1:]) + 1, T0, T0, T0, c))
+        conn.execute("INSERT INTO packs (id, owner, booster, price, picks, choices, status, created_at) VALUES "
+                     "('k1', 'p1', 'joker_standard_normal', 100, 1, %s, 'open', %s)",
+                     (Jsonb([{"kind": "joker", "key": "j_joker", "rarity": 1, "edition": "base", "condition": 0.256},
+                             {"kind": "joker", "key": "j_mime", "rarity": 2, "edition": "base"}]), T0))
+    store = postgres.PostgresStore(PG_URL, schema=search_path.strip('"'))  # type: ignore[arg-type]
+    try:
+        with store.unit() as u:
+            new = {iid: u.item(iid).condition for iid in old}  # type: ignore[union-attr]
+            assert new["i0"] == 0.0 and new["i5"] == 1.0
+            assert abs(new["i2"] - 0.5) < 0.001  # the old median is the new one
+            assert sorted(new, key=new.__getitem__) == list(old)  # the order stays
+            assert all(new[i] >= old[i] for i in old)  # kinder
+            pack = u.pack("k1")
+            assert pack is not None and abs(pack.choices[0].condition - 0.5) < 0.001  # type: ignore[operator]
+            assert pack.choices[1].condition is None
     finally:
         store.close()

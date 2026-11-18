@@ -69,6 +69,8 @@ class ItemView:
     grade: str = ""  # its condition's name: ruined, battered, worn, played, fine, excellent, mint, pristine
     mint_value: int = 0  # coins: what it would be worth in perfect condition (its card, edition, upgrades)
     value: int = 0  # coins: its mint value times its condition (what the casino stakes it at)
+    destroyed_at: datetime | None = None  # put in an upgrade: gone (its history stays)
+    destroyed_in: str | None = None  # the upgrade
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -382,6 +384,10 @@ class CasinoRulesView:
     trade_hold_days: float  # the items won start it
     dice_min_chance: int = 5  # percent: the chances a dice game's first player may choose
     dice_max_chance: int = 95
+    upgrade_edge: float = 95  # percent: an upgrade's chance is this over its multiplier
+    upgrade_margin: float = 5  # percent: an upgrade's prize is worth its target this much more or less
+    upgrade_min_multiplier: float = 1
+    upgrade_max_multiplier: float = 100
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -448,6 +454,72 @@ class LeaderboardView:
 
 
 @dataclass(frozen=True, kw_only=True)
+class NewUpgrade:
+    item: str
+    multiplier: float
+    seed: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class SeedView:
+    seed_hash: str  # SHA-256 of the server seed of the player's next upgrade
+
+
+@dataclass(frozen=True, kw_only=True)
+class PrizeView:
+    """A card an upgrade may give."""
+
+    kind: Kind
+    key: str
+    name: str
+    rarity: Rarity
+    edition: Edition
+    enhancement: str | None
+    seal: str | None
+    mint_value: int
+    condition_low: float  # its condition would be from low to high
+    condition_high: float
+    share: float  # percent: how likely it is among the prizes
+    sprite: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class UpgradePreviewView:
+    value: int  # the item's
+    multiplier: float
+    target: int
+    low: int  # the prize is worth from low to high
+    high: int
+    chance: float  # percent
+    possible: bool  # some card can be worth that much
+    prizes: int  # how many cards and editions could be the prize
+    examples: list[PrizeView]  # the likeliest
+
+
+@dataclass(frozen=True, kw_only=True)
+class UpgradeView:
+    id: str
+    player: str
+    player_name: str | None
+    item: ItemView | None  # the item put in (gone)
+    item_value: int
+    multiplier: float
+    chance: float  # percent
+    chance_ppm: int  # parts per million: a roll below wins
+    target: int
+    low: int
+    high: int
+    seed_hash: str
+    server_seed: str  # (shown: the upgrade is over as soon as it is made)
+    seed: str
+    roll: int  # parts per million
+    won: bool
+    prize: ItemView | None
+    prize_value: int | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, kw_only=True)
 class CasinoSnapshotView:
     """Everything the casino shows at once (a live stream's first event)."""
 
@@ -456,11 +528,13 @@ class CasinoSnapshotView:
     jackpot: JackpotView
     recent: list[GameView]  # the last games drawn
     rules: CasinoRulesView
+    upgrades: list[UpgradeView] = field(default_factory=list)  # the last upgrades
 
 
 @dataclass(frozen=True)
 class CasinoEvent:
-    """A change of the casino, live: ``game`` (a GameView: made, joined, drawn, cancelled, a pot's new entry)."""
+    """A change of the casino, live: ``game`` (a GameView: made, joined, drawn, cancelled, a pot's new entry),
+    ``upgrade`` (an UpgradeView)."""
 
     type: str
     data: Any

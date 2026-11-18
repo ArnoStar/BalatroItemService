@@ -11,10 +11,19 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
-from balatro_items.application.dto import CasinoRulesView, CasinoStatsView, GameView, JackpotView, LeaderboardView
+from balatro_items.application.dto import (
+    CasinoRulesView,
+    CasinoStatsView,
+    GameView,
+    JackpotView,
+    LeaderboardView,
+    SeedView,
+    UpgradePreviewView,
+    UpgradeView,
+)
 from balatro_items.domain import Mode
 from balatro_items.presentation.http.deps import CurrentPlayer, Uses
-from balatro_items.presentation.http.schemas import BetRequest, CoinflipRequest, DiceRequest
+from balatro_items.presentation.http.schemas import BetRequest, CoinflipRequest, DiceRequest, UpgradeRequest
 
 router = APIRouter(prefix="/v1/casino", tags=["casino"])
 
@@ -149,6 +158,40 @@ HEADERS = {
 
 def frame(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(jsonable_encoder(data), separators=(',', ':'))}\n\n"
+
+
+@router.get("/upgrades/seed", response_model=SeedView, summary="Your next upgrade's server seed, hashed")
+def upgrade_seed(player: CurrentPlayer, uses: Uses) -> SeedView:
+    """The SHA-256 of the server seed your next upgrade will use: it is shown with the upgrade once made, so that you
+    can check its roll."""
+    return uses.upgrade_seed(player)
+
+
+@router.get("/upgrades/preview", response_model=UpgradePreviewView, summary="What an upgrade would be")
+def preview_upgrade(player: CurrentPlayer, uses: Uses, item: str,
+                    multiplier: Annotated[float, Query(ge=1, le=100)] = 2) -> UpgradePreviewView:
+    """The chance (95% over the multiplier), the prize's value range (5% more or less than the target), and the
+    likeliest prizes."""
+    return uses.preview_upgrade(player, item, multiplier)
+
+
+@router.post("/upgrades", response_model=UpgradeView, status_code=status.HTTP_201_CREATED,
+             summary="Upgrade an item: against the house")
+def play_upgrade(body: UpgradeRequest, player: CurrentPlayer, uses: Uses) -> UpgradeView:
+    """Your item is gone whatever happens; a roll under the chance makes you a new item worth its value times the
+    multiplier, 5% more or less. Provably fair: the server seed was committed to (``GET /v1/casino/upgrades/seed``)."""
+    return uses.play_upgrade(player, body.to_dto())
+
+
+@router.get("/upgrades", response_model=list[UpgradeView], summary="The last upgrades")
+def list_upgrades(player: CurrentPlayer, uses: Uses, of: str | None = Query(None, description="a player's"),
+                  limit: Annotated[int, Query(ge=1, le=100)] = 20, before: datetime | None = None) -> list[UpgradeView]:
+    return uses.upgrades(player, of, limit, before)
+
+
+@router.get("/upgrades/{upgrade_id}", response_model=UpgradeView, summary="An upgrade")
+def get_upgrade(upgrade_id: str, player: CurrentPlayer, uses: Uses) -> UpgradeView:
+    return uses.upgrade(player, upgrade_id)
 
 
 @router.get("/live", summary="The casino, live (server-sent events)",

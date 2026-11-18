@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from balatro_items.application.dto import CoinGift, Gift, NewBet, NewListing, NewTrade
+from balatro_items.application.dto import CoinGift, Gift, NewBet, NewListing, NewTrade, NewUpgrade
 from balatro_items.domain import (
     ENHANCEMENTS,
     MAX_CHANCE,
+    MAX_MULTIPLIER,
     MAX_PRICE,
     MAX_SIDE,
     MAX_STAKE,
     MIN_CHANCE,
+    MIN_MULTIPLIER,
     MIN_PRICE,
     SEALS,
     Edition,
@@ -108,3 +110,16 @@ class DiceRequest(BetRequest):
 
     def to_dto(self) -> NewBet:
         return NewBet(items=self.items, seed=self.seed, chance=self.chance, opponent=self.opponent)
+
+
+class UpgradeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    item: str = Field(description="Your item to put in (out of its trade hold): it is gone whatever happens")
+    multiplier: float = Field(ge=MIN_MULTIPLIER, le=MAX_MULTIPLIER,
+                              description="Aim at an item worth this many times more (x1 ... x100): the chance is "
+                                          "95% over it")
+    seed: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,64}$",
+                             description="Your seed for the roll (provably fair); none: a random one")
+
+    def to_dto(self) -> NewUpgrade:
+        return NewUpgrade(item=self.item, multiplier=self.multiplier, seed=self.seed)

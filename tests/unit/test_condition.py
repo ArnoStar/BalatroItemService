@@ -17,18 +17,20 @@ from balatro_items.domain import (
 from tests.fakes import rng
 
 
-def test_good_conditions_are_rare_and_the_best_close_to_impossible() -> None:
+def test_half_the_cards_are_above_half_and_the_best_close_to_impossible() -> None:
     r = rng(4)
     rolls = [roll_condition(r) for _ in range(200_000)]
     assert all(0 <= c <= 1 for c in rolls)
     share = lambda x: sum(1 for c in rolls if c >= x) / len(rolls)  # noqa: E731
-    assert 0.24 < sorted(rolls)[len(rolls) // 2] < 0.27  # most cards are worn
-    assert 0.04 < share(0.6) < 0.048  # good: 1 in 23
-    assert 0.0012 < share(0.8) < 0.0026  # really good: 1 in 537
-    assert share(0.95) <= 5 / len(rolls)  # the best: 1 in 449,000
+    assert 0.49 < sorted(rolls)[len(rolls) // 2] < 0.51  # the median: 50%
+    assert 0.27 < share(0.6) < 0.295  # 1 in 3.5
+    assert 0.021 < share(0.8) < 0.027  # rare but within reach: 1 in 41
+    assert 0.0008 < share(0.9) < 0.0015  # 1 in 878
+    assert share(0.95) <= 30 / len(rolls)  # the best: 1 in 24,600
     # the published odds
-    assert abs((1 - condition_cdf(0.6)) - 0.0439) < 0.001
-    assert 1 / (1 - condition_cdf(0.95)) > 400_000
+    assert abs(condition_cdf(0.5) - 0.5) < 0.001
+    assert 40 < 1 / (1 - condition_cdf(0.8)) < 43
+    assert 1 / (1 - condition_cdf(0.99)) > 80_000_000
 
 
 def test_the_inverse_and_a_condition_within_bounds() -> None:

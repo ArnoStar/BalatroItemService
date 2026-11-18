@@ -104,20 +104,23 @@ game called off and its pending offers cancelled (migration 4).
 
 Every item has a condition from 0 (ruined) to 1 (pristine), drawn when its
 card is shown (a booster's card is shown with it, before the player
-chooses): `P(condition >= x) = (1 - x^1.5)^5`. Most cards are worn (half
-are below 26%); a good one is rare, a really good one really rare, the best
-close to impossible:
+chooses): `P(condition >= x) = (1 - x^3)^5.2`. Half the cards are above 50%;
+a really good one is rare but within reach, the best close to impossible:
 
 | condition | grade | one card in |
 |---|---|---|
-| 0-10% | ruined | |
+| 0-10% | ruined | (0.5% of the cards) |
 | 10-25% | battered | |
-| 25-45% | worn | 2 (25% or more) |
-| 45-60% | played | 6 |
-| 60-80% | fine | 23 |
-| 80-95% | excellent | 537 |
-| 95-99% | mint | 449,000 |
-| 99-100% | pristine | 1.3 billion |
+| 25-45% | worn | |
+| 45-60% | played | 1.6 (45% or more) |
+| 60-80% | fine | 3.5 |
+| 80-95% | excellent | 41 |
+| 95-99% | mint | 24,600 |
+| 99-100% | pristine | 85 million |
+
+(Until 2026-11-19 the curve was harsher, `(1 - x^1.5)^5`, a median of 26%:
+migration 7 moved every condition drawn on it to this one, each keeping its
+rank, so the old median became 50%.)
 
 The front ends draw it: faded and yellowed colours, grime, scratches, frayed
 edges and, once badly worn, a crease (each item its own); a pristine card is
@@ -229,6 +232,19 @@ and lost (`net`), by game, their biggest pot and their least likely win.
 `GET /v1/casino/leaderboard?period=day|week|all` has the most value won (net)
 and staked, the biggest pots and the least likely wins.
 
+**The upgrade** (against the house, the one exception). Put one item in (out
+of its trade hold) and aim at an item worth so many times more, from x1 to
+x100: the chance is 95% over the multiplier (an item worth 100 aimed at x2:
+47.5%). Your item is gone whatever happens; a win makes you a new item worth
+the target, 5% more or less, drawn as a card is found (each card and edition
+as likely as on its kind's standard table, weighed by how likely a condition
+puts it in the range; its condition drawn there). On average you get 95% of
+what you put in. Provably fair: `GET /v1/casino/upgrades/seed` shows the
+SHA-256 of your next upgrade's server seed before you play; the upgrade shows
+the seed, and `roll = h * 1,000,000 // 16**13` (h as above, message
+`"<upgrade id>:<your seed>"`) wins below `chance_ppm`. Live as `upgrade`
+events.
+
 `BALATRO_ITEMS_CASINO=off` closes the casino: nothing can be staked
 (`403 casino_closed`), staked items can still be taken back, and a pot that is
 counting down is still drawn.
@@ -285,6 +301,10 @@ own paths. With sign-in on, every route but `/health`, `/v1/odds`, `/v1/boosters
 | `GET /v1/casino/games?player=&mode=&limit=&before=` | games that are over, the last first (`before`: the next page) |
 | `GET /v1/casino/games/{id}` | a game: its entries (each with its items, value, chance, part of the pot and seed), `seed_hash`, `chance` and `opponent` (a dice game, a challenge), and once over `server_seed`, `roll`, `winner` |
 | `GET /v1/casino/players/{id}/stats` | a player's casino numbers |
+| `GET /v1/casino/upgrades/seed` | the SHA-256 of your next upgrade's server seed |
+| `GET /v1/casino/upgrades/preview?item=&multiplier=` | an upgrade's chance, the prize's range, the likeliest prizes |
+| `POST /v1/casino/upgrades` | `{item, multiplier, seed}`: upgrade an item (it is gone; a win makes a new one) |
+| `GET /v1/casino/upgrades?of=&limit=&before=`, `/upgrades/{id}` | the last upgrades, an upgrade |
 | `GET /v1/casino/leaderboard?period=day\|week\|all` | the casino's best over a period |
 
 Errors are problem details with a stable `code`: `item_not_found`,

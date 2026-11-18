@@ -18,9 +18,10 @@ screen, the profile), it never plays it.
 1. **Coins and items can't be farmed.** Coins are earned only through the
    grants of `domain/drops.py` (each once per player, read from the game API's
    counted runs) and an admin's gift; items are made only from boosters bought
-   with those coins (`domain/boosters.py`) and an admin's gift. Never add
-   another way to make a coin or an item, and never let a client say what it
-   has earned: the service reads the runs itself.
+   with those coins (`domain/boosters.py`), an upgrade's win (`domain/upgrade.py`)
+   and an admin's gift. Never add another way to make a coin or an item, and
+   never let a client say what it has earned: the service reads the runs
+   itself.
 2. **Scarcity is the point.** A new grant, more coins, a cheaper booster, a
    better table or a shorter trade hold changes the value of every item already
    made. Change them only on purpose, say so in the README ("Coins",
@@ -47,7 +48,13 @@ screen, the profile), it never plays it.
    none (no house, no cut); they play by the trade rules (a first win, the
    trade hold); staked or listed items can't change hands any other way until
    their game ends or they are sold or taken off, and items won or bought are
-   `Transfer`s with the game or the listing. Draws are
+   `Transfer`s with the game or the listing. **One exception, the owner's
+   (2026-11-19): the upgrade** (`domain/upgrade.py`) is played against the
+   house: the item put in is destroyed (kept, with `destroyed_at`), a win makes
+   one worth the multiplier, and the chance is 95% over it (the house keeps
+   5%, so items only get scarcer). It plays by the trade rules too, and it is
+   provably fair the same way (the player's next server seed is committed to).
+   Don't add another game against the house without the owner asking. Draws are
    provably fair: never show a server seed before its game is over, and never
    change how a roll is computed (games already played must still check out).
    A new game is a duel or a pot drawn the same way; a challenge only limits

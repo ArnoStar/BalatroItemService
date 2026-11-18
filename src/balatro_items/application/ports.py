@@ -23,6 +23,7 @@ from balatro_items.domain import (
     Template,
     Trade,
     Transfer,
+    Upgrade,
 )
 
 from .dto import CasinoEvent, ListingQuery, Player
@@ -45,7 +46,7 @@ class Unit(Protocol):
     def items(self, ids: Sequence[str], lock: bool = False) -> dict[str, Item]: ...
 
     def items_of(self, owner: str) -> builtins.list[Item]:
-        """Newest first."""
+        """Their items (not those destroyed), newest first."""
         ...
 
     def add_item(self, item: Item) -> Item:
@@ -104,6 +105,14 @@ class Unit(Protocol):
         ...
 
     def open_listings_of(self, seller: str) -> int: ...
+
+    def add_upgrade(self, up: Upgrade) -> None: ...
+
+    def upgrade(self, upgrade_id: str) -> Upgrade | None: ...
+
+    def upgrades(self, player: str | None, limit: int, before: datetime | None = None) -> builtins.list[Upgrade]:
+        """The last first (``before``: older than this)."""
+        ...
 
     def trade(self, trade_id: str, lock: bool = False) -> Trade | None: ...
 
