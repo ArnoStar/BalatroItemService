@@ -32,6 +32,7 @@ from balatro_items.domain import (
     Trade,
     TradeStatus,
     Transfer,
+    Upgrade,
 )
 
 
@@ -47,6 +48,7 @@ class _State:
     coin_moves: list[CoinMove] = field(default_factory=list)
     packs: dict[str, Pack] = field(default_factory=dict)
     listings: dict[str, Listing] = field(default_factory=dict)
+    upgrades: dict[str, Upgrade] = field(default_factory=dict)
 
 
 class MemoryUnit:
@@ -76,7 +78,7 @@ class MemoryUnit:
         return {i: copy.copy(self.s.items[i]) for i in ids if i in self.s.items}
 
     def items_of(self, owner: str) -> builtins.list[Item]:
-        mine = [it for it in self.s.items.values() if it.owner == owner]
+        mine = [it for it in self.s.items.values() if it.owner == owner and it.destroyed_at is None]
         return [copy.copy(it) for it in sorted(mine, key=lambda it: (it.acquired_at, it.id), reverse=True)]
 
     def add_item(self, item: Item) -> Item:
@@ -170,6 +172,19 @@ class MemoryUnit:
 
     def open_listings_of(self, seller: str) -> int:
         return sum(1 for x in self.s.listings.values() if x.seller == seller and x.status is ListingStatus.OPEN)
+
+    def add_upgrade(self, up: Upgrade) -> None:
+        self.s.upgrades[up.id] = copy.copy(up)
+
+    def upgrade(self, upgrade_id: str) -> Upgrade | None:
+        up = self.s.upgrades.get(upgrade_id)
+        return copy.copy(up) if up else None
+
+    def upgrades(self, player: str | None, limit: int, before: datetime | None = None) -> builtins.list[Upgrade]:
+        found = [u for u in self.s.upgrades.values() if (player is None or u.player == player)
+                 and (before is None or u.created_at < before)]
+        found.sort(key=lambda u: (u.created_at, u.id), reverse=True)
+        return [copy.copy(u) for u in found[:limit]]
 
     def trade(self, trade_id: str, lock: bool = False) -> Trade | None:
         t = self.s.trades.get(trade_id)

@@ -365,7 +365,7 @@ def test_migration_4_gives_the_tags_back_in_coins(pg) -> None:  # type: ignore[n
     with psycopg.connect(PG_URL, autocommit=True) as conn:  # type: ignore[arg-type]
         conn.execute(pgsql.SQL("SET search_path TO {}").format(pgsql.SQL(search_path)))
         for table in ("schema_migrations", "players", "serials", "items", "transfers", "claims", "trades", "games",
-                      "coin_moves", "packs", "listings"):
+                      "coin_moves", "packs", "listings", "upgrades"):
             conn.execute(pgsql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(pgsql.Identifier(table)))
         conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL "
                      "DEFAULT now())")

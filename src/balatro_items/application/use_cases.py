@@ -18,19 +18,23 @@ from balatro_items.domain import (
     BOOSTERS,
     COINFLIP_MARGIN,
     DUELS,
+    EDGE,
     EDITIONS,
     GOLD_COINS,
     JACKPOT_MAX_ITEMS,
     JACKPOT_MAX_PLAYERS,
     MAX_CHANCE,
     MAX_LISTINGS,
+    MAX_MULTIPLIER,
     MAX_OPEN_COINFLIPS,
     MAX_PENDING,
     MAX_PRICE,
     MAX_STAKE,
     MIN_CHANCE,
+    MIN_MULTIPLIER,
     MIN_PRICE,
     OFFER_LIFETIME,
+    PRIZE_MARGIN,
     TABLES,
     WEEKLY_COINS,
     WIN_COINS,
@@ -73,12 +77,15 @@ from balatro_items.domain import (
     TradeStatus,
     TradingLocked,
     Transfer,
+    Upgrade,
     cancel,
+    chance_ppm,
     check_bet,
     check_challenge,
     check_chance,
     check_items,
     check_join,
+    check_multiplier,
     check_offer,
     check_price,
     choose,
@@ -94,12 +101,17 @@ from balatro_items.domain import (
     next_week,
     parts,
     pay_out,
+    pick_prize,
+    prize_range,
+    prizes,
     roll_condition,
     roll_pack,
+    seed_hash,
     sell,
     swap,
     take_off,
     tally,
+    upgrade_roll,
     variant,
     week_of,
     winner_chance,
@@ -132,15 +144,20 @@ from .dto import (
     NewBet,
     NewListing,
     NewTrade,
+    NewUpgrade,
     OddsView,
     PackView,
     Player,
     PlayerView,
+    PrizeView,
     RankView,
     RuleView,
+    SeedView,
     TableView,
     TradeView,
     TransferView,
+    UpgradePreviewView,
+    UpgradeView,
     WeekView,
     WinView,
 )
@@ -267,7 +284,7 @@ class Views:
                 sprite=t.sprite if t else None, enhancement=it.enhancement, seal=it.seal, variant=it.variant,
                 listed=it.listed, price=listing.price if listing else None, booster=it.booster,
                 condition=it.condition, grade=grade(it.condition), mint_value=item_mint_value(it),
-                value=item_value(it)))
+                value=item_value(it), destroyed_at=it.destroyed_at, destroyed_in=it.destroyed_in))
         return out
 
     def item(self, u: Unit, item: Item) -> ItemView:
@@ -275,7 +292,8 @@ class Views:
 
     def showcase(self, u: Unit, rec: PlayerRecord) -> ItemView | None:
         item = u.item(rec.showcase) if rec.showcase else None
-        return self.item(u, item) if item is not None and item.owner == rec.id else None
+        shown = item is not None and item.owner == rec.id and item.destroyed_at is None
+        return self.item(u, item) if item is not None and shown else None
 
     def week(self, u: Unit, player_id: str) -> WeekView:
         now = self.deps.clock.now()
@@ -353,10 +371,12 @@ class Views:
 
 
 def unshow(u: Unit, players: Sequence[str], items: dict[str, Item]) -> None:
-    """An item shown by its former owner isn't theirs to show any more: their title screen gets the game's card."""
+    """An item shown by its former owner (or destroyed) isn't theirs to show any more: their title screen gets the
+    game's card."""
     for pid in players:
         rec = u.player(pid, lock=True)
-        if rec is not None and rec.showcase in items and items[rec.showcase].owner != pid:
+        if rec is not None and rec.showcase in items and (items[rec.showcase].owner != pid
+                                                          or items[rec.showcase].destroyed_at is not None):
             rec.showcase = None
             u.save_player(rec)
 
@@ -501,7 +521,7 @@ class SetShowcase:
                 item = u.item(item_id)
                 if item is None:
                     raise ItemNotFound(item_id)
-                if item.owner != player.id:
+                if item.owner != player.id or item.destroyed_at is not None:
                     raise NotOwner("only your own items can be shown")
             rec.showcase = item_id
             u.save_player(rec)
@@ -1047,6 +1067,17 @@ class Casino:
             updated_at=game.updated_at, closes_at=game.closes_at, chance=game.chance, opponent=game.opponent,
             opponent_name=names.get(game.opponent) if game.opponent else None)
 
+    def upgrade_view(self, u: Unit, up: Upgrade) -> UpgradeView:
+        items = u.items([up.item, *([up.prize] if up.prize else [])])
+        views = {v.id: v for v in self.views.items(u, list(items.values()))}
+        rec = u.player(up.player)
+        return UpgradeView(
+            id=up.id, player=up.player, player_name=rec.name if rec else None, item=views.get(up.item),
+            item_value=up.item_value, multiplier=up.multiplier, chance=round(up.chance_ppm / 10_000, 4),
+            chance_ppm=up.chance_ppm, target=up.target, low=up.low, high=up.high, seed_hash=up.seed_hash,
+            server_seed=up.server_seed, seed=up.seed, roll=up.roll, won=up.won,
+            prize=views.get(up.prize) if up.prize else None, prize_value=up.prize_value, created_at=up.created_at)
+
     def win(self, u: Unit, game: Game, names: dict[str, str | None]) -> WinView:
         winner = game.winner or ""
         if winner not in names:
@@ -1067,7 +1098,9 @@ class CasinoRules:
             open=d.casino_open, max_items=MAX_STAKE, coinflip_margin=COINFLIP_MARGIN,
             max_open_coinflips=MAX_OPEN_COINFLIPS, jackpot_seconds=d.jackpot_wait.total_seconds(),
             jackpot_max_players=JACKPOT_MAX_PLAYERS, jackpot_max_items=JACKPOT_MAX_ITEMS,
-            trade_hold_days=d.hold.total_seconds() / 86400, dice_min_chance=MIN_CHANCE, dice_max_chance=MAX_CHANCE)
+            trade_hold_days=d.hold.total_seconds() / 86400, dice_min_chance=MIN_CHANCE, dice_max_chance=MAX_CHANCE,
+            upgrade_edge=round(100 * EDGE, 2), upgrade_margin=round(100 * PRIZE_MARGIN, 2),
+            upgrade_min_multiplier=MIN_MULTIPLIER, upgrade_max_multiplier=MAX_MULTIPLIER)
 
 
 class OpenDuels(Casino):
@@ -1312,7 +1345,123 @@ class CasinoSnapshot(Casino):
                 jackpot=JackpotView(round=self.view(u, pot) if pot else None,
                                     last=self.view(u, last[0]) if last else None, now=now),
                 recent=[self.view(u, g) for g in u.games(None, GameStatus.DONE, None, RECENT_GAMES)],
-                rules=CasinoRules(self.deps)())
+                rules=CasinoRules(self.deps)(),
+                upgrades=[self.upgrade_view(u, x) for x in u.upgrades(None, RECENT_GAMES)])
+
+
+EXAMPLES = 8  # an upgrade's preview shows its likeliest prizes, this many
+
+
+class UpgradeSeed(Casino):
+    """The SHA-256 of the server seed the player's next upgrade will use: shown before they play, so that the roll
+    can be checked once it is made (made the first time)."""
+
+    def __call__(self, player: Player) -> SeedView:
+        with self.deps.store.unit() as u:
+            rec = ensure_player(u, player, self.deps.clock.now())
+            rec = u.player(player.id, lock=True) or rec
+            if rec.upgrade_seed is None:
+                rec.upgrade_seed = self.deps.seeds.seed()
+                u.save_player(rec)
+            return SeedView(seed_hash=seed_hash(rec.upgrade_seed))
+
+
+class PreviewUpgrade(Casino):
+    """What an upgrade of this item at this multiplier would be: its chance, the prize's range, the likeliest prizes."""
+
+    def __call__(self, viewer: Player, item_id: str, multiplier: float) -> UpgradePreviewView:
+        m = check_multiplier(multiplier)
+        pools = self.views.pools(strict=True)
+        with self.deps.store.unit() as u:
+            item = u.item(item_id)
+            if item is None or item.destroyed_at is not None:
+                raise ItemNotFound(item_id)
+            value = item_value(item)
+        target, low, high = prize_range(value, m)
+        found = prizes(pools, low, high)
+        total = sum(p.weight for p in found)
+        examples = [PrizeView(kind=p.template.kind, key=p.template.key, name=p.template.name,
+                              rarity=p.template.rarity, edition=p.edition, enhancement=p.template.enhancement,
+                              seal=p.template.seal, mint_value=p.mint, condition_low=p.low, condition_high=p.high,
+                              share=round(100 * p.weight / total, 3), sprite=p.template.sprite)
+                    for p in sorted(found, key=lambda p: -p.weight)[:EXAMPLES]]
+        return UpgradePreviewView(value=value, multiplier=m, target=target, low=low, high=high,
+                                  chance=round(chance_ppm(m) / 10_000, 4), possible=bool(found), prizes=len(found),
+                                  examples=examples)
+
+
+class PlayUpgrade(Casino):
+    """The player's item is put in (gone, whatever happens) and rolled against the house: a win makes a new item worth
+    the item's value times the multiplier, 5% more or less."""
+
+    def __call__(self, player: Player, bet: NewUpgrade) -> UpgradeView:
+        self.check_open()
+        d = self.deps
+        m = check_multiplier(bet.multiplier)
+        seed = bet.seed or d.seeds.seed()[:16]
+        check_bet([bet.item], seed)
+        pools = self.views.pools(strict=True)  # (outside the transaction: the game API may be slow)
+        now = d.clock.now()
+        with d.store.unit() as u:
+            ensure_player(u, player, now)
+            rec = u.player(player.id, lock=True)
+            assert rec is not None
+            if not rec.has_won:
+                raise TradingLocked("the casino opens after your first win (a counted run)")
+            items = u.items([bet.item], lock=True)
+            check_items(player.id, [bet.item], items, now, moved=False)
+            item = items[bet.item]
+            if item.variant not in pools.by_variant:
+                raise InvalidBet(f"item {bet.item!r} has no value for now: try again later")
+            value = item_value(item)
+            target, low, high = prize_range(value, m)
+            found = prizes(pools, low, high)
+            if not found:
+                raise InvalidBet(f"no card can be worth {target:,} coins: aim lower")
+            # the server seed committed to (its hash shown before), and a new one for the next upgrade
+            server_seed = rec.upgrade_seed or d.seeds.seed()
+            rec.upgrade_seed = d.seeds.seed()
+            u.save_player(rec)
+            up = Upgrade(id=d.ids.new_id(), player=player.id, item=item.id, item_value=value, multiplier=m,
+                         chance_ppm=chance_ppm(m), target=target, low=low, high=high, server_seed=server_seed,
+                         seed=seed, roll=0, created_at=now)
+            up.roll = upgrade_roll(server_seed, up.id, seed)
+            item.destroyed_at, item.destroyed_in = now, up.id
+            u.save_item(item)
+            unshow(u, [player.id], {item.id: item})
+            if up.won:
+                prize, condition = pick_prize(found, d.rng)
+                t = prize.template
+                won = u.add_item(Item(
+                    id=d.ids.new_id(), kind=t.kind, key=t.key, edition=prize.edition, rarity=t.rarity, stake=None,
+                    serial=0, owner=player.id, source="upgrade", source_run=None, created_at=now, acquired_at=now,
+                    tradable_at=now + d.hold, enhancement=t.enhancement, seal=t.seal, condition=condition))
+                u.add_transfer(Transfer(item=won.id, from_owner=None, to_owner=player.id, at=now, game=up.id))
+                up.prize, up.prize_value = won.id, item_value(won)
+            u.add_upgrade(up)
+            log.info("upgrade %s: %s put %s (%d) at x%.2f: %s", up.id, player.id, item.variant, value, m,
+                     f"won {up.prize} ({up.prize_value})" if up.won else "lost")
+            view = self.upgrade_view(u, up)
+        self.deps.feed.publish(CasinoEvent("upgrade", view))
+        return view
+
+
+class ListUpgrades(Casino):
+    """The last upgrades (everyone's, or a player's; ``before``: older than this)."""
+
+    def __call__(self, viewer: Player, player: str | None = None, limit: int = 20,
+                 before: datetime | None = None) -> list[UpgradeView]:
+        with self.deps.store.unit() as u:
+            return [self.upgrade_view(u, x) for x in u.upgrades(player, limit, before)]
+
+
+class GetUpgrade(Casino):
+    def __call__(self, viewer: Player, upgrade_id: str) -> UpgradeView:
+        with self.deps.store.unit() as u:
+            up = u.upgrade(upgrade_id)
+            if up is None:
+                raise GameNotFound(upgrade_id)
+            return self.upgrade_view(u, up)
 
 
 class CasinoSubscribe:
@@ -1385,6 +1534,11 @@ class UseCases:
     casino_snapshot: CasinoSnapshot
     casino_subscribe: CasinoSubscribe
     settle_casino: SettleCasino
+    upgrade_seed: UpgradeSeed
+    preview_upgrade: PreviewUpgrade
+    play_upgrade: PlayUpgrade
+    upgrades: ListUpgrades
+    upgrade: GetUpgrade
 
 
 def build(deps: Deps, authenticator: Authenticator) -> UseCases:
@@ -1404,4 +1558,6 @@ def build(deps: Deps, authenticator: Authenticator) -> UseCases:
         cancel_dice=CancelDuel(deps, Mode.DICE), jackpot=GetJackpot(deps), join_jackpot=JoinJackpot(deps),
         leave_jackpot=LeaveJackpot(deps), game=GetGame(deps), casino_history=CasinoHistory(deps),
         casino_stats=CasinoStats(deps), casino_leaderboard=CasinoLeaderboard(deps),
-        casino_snapshot=CasinoSnapshot(deps), casino_subscribe=CasinoSubscribe(deps), settle_casino=SettleCasino(deps))
+        casino_snapshot=CasinoSnapshot(deps), casino_subscribe=CasinoSubscribe(deps), settle_casino=SettleCasino(deps),
+        upgrade_seed=UpgradeSeed(deps), preview_upgrade=PreviewUpgrade(deps), play_upgrade=PlayUpgrade(deps),
+        upgrades=ListUpgrades(deps), upgrade=GetUpgrade(deps))

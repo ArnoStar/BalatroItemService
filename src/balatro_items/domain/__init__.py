@@ -116,6 +116,20 @@ from .items import (
 )
 from .market import MAX_LISTINGS, MAX_PRICE, MIN_PRICE, Listing, ListingStatus, check_price, sell, take_off
 from .trades import MAX_PENDING, MAX_SIDE, OFFER_LIFETIME, Trade, TradeStatus, check_items, check_offer, swap
+from .upgrade import (
+    EDGE,
+    MAX_MULTIPLIER,
+    MIN_MULTIPLIER,
+    PRIZE_MARGIN,
+    Prize,
+    Upgrade,
+    chance_ppm,
+    check_multiplier,
+    pick_prize,
+    prize_range,
+    prizes,
+    upgrade_roll,
+)
 from .value import item_mint_value, item_value, mint_value, worth
 
 ANONYMOUS_PLAYER = "anonymous"
@@ -136,5 +150,7 @@ __all__ = [
     "coinflip_range", "draw", "earned", "editions", "join_duel", "join_jackpot", "join_range", "next_week", "parts",
     "pay_out", "playing_cards", "roll_pack", "seed_hash", "sell", "stake_of", "swap", "table", "take_off", "tally",
     "variant", "week_of", "winner_chance", "GRADES", "condition_at", "condition_cdf", "grade", "roll_condition",
-    "roll_condition_between", "item_mint_value", "item_value", "mint_value", "worth",
+    "roll_condition_between", "item_mint_value", "item_value", "mint_value", "worth", "EDGE", "MAX_MULTIPLIER",
+    "MIN_MULTIPLIER", "PRIZE_MARGIN", "Prize", "Upgrade", "chance_ppm", "check_multiplier", "pick_prize",
+    "prize_range", "prizes", "upgrade_roll",
 ]

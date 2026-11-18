@@ -142,13 +142,16 @@ class Item:
     seal: str | None = None  # a playing card's
     listed: str | None = None  # its open listing on the market (it can't change hands any other way meanwhile)
     booster: str | None = None  # the booster it came from (boosters.Booster.id)
+    destroyed_at: datetime | None = None  # put in an upgrade (upgrade.py): gone, its history kept
+    destroyed_in: str | None = None  # the upgrade
 
     @property
     def variant(self) -> str:
         return variant(self.key, self.enhancement, self.seal)
 
     def tradable(self, now: datetime) -> bool:
-        return self.staked is None and self.listed is None and now >= self.tradable_at
+        return (self.staked is None and self.listed is None and self.destroyed_at is None
+                and now >= self.tradable_at)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -177,6 +180,7 @@ class PlayerRecord:
     created_at: datetime
     synced_at: datetime | None = None  # the last time their runs were read
     coins: int = 0  # (read only: coins change through Unit.add_coins, which keeps their history)
+    upgrade_seed: str | None = None  # the server seed of their next upgrade (secret; its hash is shown first)
 
 
 @dataclass(frozen=True, kw_only=True)
