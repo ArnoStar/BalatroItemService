@@ -104,20 +104,23 @@ game called off and its pending offers cancelled (migration 4).
 
 Every item has a condition from 0 (ruined) to 1 (pristine), drawn when its
 card is shown (a booster's card is shown with it, before the player
-chooses): `P(condition >= x) = (1 - x^1.5)^5`. Most cards are worn (half
-are below 26%); a good one is rare, a really good one really rare, the best
-close to impossible:
+chooses): `P(condition >= x) = (1 - x^3)^5.2`. Half the cards are above 50%;
+a really good one is rare but within reach, the best close to impossible:
 
 | condition | grade | one card in |
 |---|---|---|
-| 0-10% | ruined | |
+| 0-10% | ruined | (0.5% of the cards) |
 | 10-25% | battered | |
-| 25-45% | worn | 2 (25% or more) |
-| 45-60% | played | 6 |
-| 60-80% | fine | 23 |
-| 80-95% | excellent | 537 |
-| 95-99% | mint | 449,000 |
-| 99-100% | pristine | 1.3 billion |
+| 25-45% | worn | |
+| 45-60% | played | 1.6 (45% or more) |
+| 60-80% | fine | 3.5 |
+| 80-95% | excellent | 41 |
+| 95-99% | mint | 24,600 |
+| 99-100% | pristine | 85 million |
+
+(Until 2026-11-19 the curve was harsher, `(1 - x^1.5)^5`, a median of 26%:
+migration 7 moved every condition drawn on it to this one, each keeping its
+rank, so the old median became 50%.)
 
 The front ends draw it: faded and yellowed colours, grime, scratches, frayed
 edges and, once badly worn, a crease (each item its own); a pristine card is

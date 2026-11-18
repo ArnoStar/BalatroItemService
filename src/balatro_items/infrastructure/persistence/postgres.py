@@ -264,6 +264,21 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX upgrades_created ON upgrades (created_at DESC);
     CREATE INDEX upgrades_player ON upgrades (player, created_at DESC);
     """,
+    # 7: conditions are kinder (domain/condition.py: a = 3, b = 5.2, a median of 50%): every condition drawn before
+    # (a = 1.5, b = 5) moves to the new distribution keeping its rank, new = F_new^-1(F_old(old)) =
+    # (1 - (1 - old^1.5)^(5/5.2))^(1/3); the cards of the packs not chosen from yet too
+    """
+    CREATE FUNCTION pg_temp.kinder(c DOUBLE PRECISION) RETURNS DOUBLE PRECISION AS $$
+        SELECT round(power(1 - power(1 - power(c, 1.5), 5.0 / 5.2), 1.0 / 3)::numeric, 6)::float8
+    $$ LANGUAGE sql IMMUTABLE;
+    UPDATE items SET condition = pg_temp.kinder(condition);
+    UPDATE packs SET choices = (
+        SELECT jsonb_agg(CASE WHEN jsonb_typeof(c -> 'condition') = 'number'
+                              THEN jsonb_set(c, '{condition}', to_jsonb(pg_temp.kinder((c ->> 'condition')::float8)))
+                              ELSE c END ORDER BY n)
+        FROM jsonb_array_elements(choices) WITH ORDINALITY AS t (c, n))
+    WHERE status = 'open' AND jsonb_array_length(choices) > 0;
+    """,
 )
 
 ITEM_COLUMNS = ("id", "kind", "key", "edition", "rarity", "stake", "serial", "owner", "source", "source_run",
