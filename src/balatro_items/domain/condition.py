@@ -9,8 +9,9 @@ so half the cards are above 50% (the median), 60% or more is 1 in 3.5, a
 really good one rare but within reach (80%: 1 in 41; 90%: 1 in 878), and the
 best close to impossible (95%: 1 in 24,600; 99%: about 1 in 85 million). Its
 inverse is closed-form, so it is drawn from one uniform number (the store's
-migration 5 drew the conditions of the items made before this way, and
-migration 7 moved them to this distribution, each keeping its rank).
+migration 5 drew the conditions of the items made before this way, migration
+7 moved them to this distribution, each keeping its rank, and migration 8
+drew every item's condition again on it).
 
 (Until 2026-11-19 it was a = 1.5, b = 5: a median of 26%, 80% 1 in 537.)
 

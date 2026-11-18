@@ -279,6 +279,11 @@ MIGRATIONS: tuple[str, ...] = (
         FROM jsonb_array_elements(choices) WITH ORDINALITY AS t (c, n))
     WHERE status = 'open' AND jsonb_array_length(choices) > 0;
     """,
+    # 8: every item's condition drawn again, on the kinder distribution (a = 3, b = 5.2: its inverse, from one uniform
+    # number each), at the owner's request (2026-11-19): a fresh start for the items made before
+    """
+    UPDATE items SET condition = round(power(1 - power(1 - random(), 1.0 / 5.2), 1.0 / 3)::numeric, 6)::float8;
+    """,
 )
 
 ITEM_COLUMNS = ("id", "kind", "key", "edition", "rarity", "stake", "serial", "owner", "source", "source_run",
