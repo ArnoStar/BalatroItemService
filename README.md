@@ -120,7 +120,8 @@ a really good one is rare but within reach, the best close to impossible:
 
 (Until 2026-11-19 the curve was harsher, `(1 - x^1.5)^5`, a median of 26%:
 migration 7 moved every condition drawn on it to this one, each keeping its
-rank, so the old median became 50%.)
+rank, then migration 8 drew every item's condition again on this curve: a
+fresh start for every item made before.)
 
 The front ends draw it: faded and yellowed colours, grime, scratches, frayed
 edges and, once badly worn, a crease (each item its own); a pristine card is

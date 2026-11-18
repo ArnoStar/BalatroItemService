@@ -439,7 +439,6 @@ def test_migration_7_moves_the_conditions_of_before_keeping_their_rank(pg) -> No
     store.close()
     with psycopg.connect(PG_URL, autocommit=True) as conn:  # type: ignore[arg-type]
         conn.execute(pgsql.SQL("SET search_path TO {}").format(pgsql.SQL(search_path)))
-        conn.execute("DELETE FROM schema_migrations WHERE version = 7")
         conn.execute("INSERT INTO players (id, name, has_won, showcase, created_at) VALUES ('p1', 'A', true, null, %s)",
                      (T0,))
         old = {"i0": 0.0, "i1": 0.1, "i2": 0.256, "i3": 0.6, "i4": 0.8, "i5": 1.0}
@@ -451,6 +450,7 @@ def test_migration_7_moves_the_conditions_of_before_keeping_their_rank(pg) -> No
                      "('k1', 'p1', 'joker_standard_normal', 100, 1, %s, 'open', %s)",
                      (Jsonb([{"kind": "joker", "key": "j_joker", "rarity": 1, "edition": "base", "condition": 0.256},
                              {"kind": "joker", "key": "j_mime", "rarity": 2, "edition": "base"}]), T0))
+        conn.execute(postgres.MIGRATIONS[6].encode())  # (migration 7 alone: 8 draws them all again after it)
     store = postgres.PostgresStore(PG_URL, schema=search_path.strip('"'))  # type: ignore[arg-type]
     try:
         with store.unit() as u:
@@ -462,5 +462,38 @@ def test_migration_7_moves_the_conditions_of_before_keeping_their_rank(pg) -> No
             pack = u.pack("k1")
             assert pack is not None and abs(pack.choices[0].condition - 0.5) < 0.001  # type: ignore[operator]
             assert pack.choices[1].condition is None
+    finally:
+        store.close()
+
+
+def test_migration_8_draws_every_items_condition_again(pg) -> None:  # type: ignore[no-untyped-def]
+    """Every item gets a new condition, drawn on the kinder curve (a median of 50%)."""
+    import psycopg
+    from psycopg import sql as pgsql
+
+    from balatro_items.infrastructure.persistence import postgres
+    from tests.conftest import PG_URL
+
+    store = pg()
+    with store._pool.connection() as conn:
+        search_path = conn.execute("SHOW search_path").fetchone()["search_path"]  # type: ignore[index]
+    store.close()
+    with psycopg.connect(PG_URL, autocommit=True) as conn:  # type: ignore[arg-type]
+        conn.execute(pgsql.SQL("SET search_path TO {}").format(pgsql.SQL(search_path)))
+        conn.execute("DELETE FROM schema_migrations WHERE version = 8")
+        conn.execute("INSERT INTO players (id, name, has_won, showcase, created_at) VALUES ('p1', 'A', true, null, %s)",
+                     (T0,))
+        for n in range(1000):
+            conn.execute("INSERT INTO items (id, kind, key, edition, rarity, serial, owner, source, created_at, "
+                         "acquired_at, tradable_at, condition) VALUES (%s, 'joker', 'j_joker', 'base', 1, %s, 'p1', "
+                         "'gift', %s, %s, %s, 0.123456)", (f"i{n}", n + 1, T0, T0, T0))
+    store = postgres.PostgresStore(PG_URL, schema=search_path.strip('"'))  # type: ignore[arg-type]
+    try:
+        with store.unit() as u:
+            conditions = sorted(i.condition for i in u.items_of("p1"))
+            assert len(conditions) == 1000 and 0.123456 not in conditions
+            assert all(0 <= c <= 1 for c in conditions)
+            assert 0.45 < conditions[500] < 0.55  # the median: 50%
+            assert len(set(conditions)) > 990  # each its own
     finally:
         store.close()
