@@ -104,24 +104,27 @@ game called off and its pending offers cancelled (migration 4).
 
 Every item has a condition from 0 (ruined) to 1 (pristine), drawn when its
 card is shown (a booster's card is shown with it, before the player
-chooses): `P(condition >= x) = (1 - x^3)^5.2`. Half the cards are above 50%;
+chooses): `P(condition >= x) = (1 - x^3.5)^5`. Half the cards are above 56%;
 a really good one is rare but within reach, the best close to impossible:
 
 | condition | grade | one card in |
 |---|---|---|
-| 0-10% | ruined | (0.5% of the cards) |
+| 0-10% | ruined | (0.16% of the cards) |
 | 10-25% | battered | |
 | 25-45% | worn | |
-| 45-60% | played | 1.6 (45% or more) |
-| 60-80% | fine | 3.5 |
-| 80-95% | excellent | 41 |
-| 95-99% | mint | 24,600 |
-| 99-100% | pristine | 85 million |
+| 45-60% | played | 1.4 (45% or more) |
+| 60-80% | fine | 2.5 |
+| 80-95% | excellent | 21 |
+| 95-99% | mint | 8,300 |
+| 99-100% | pristine | 20 million |
 
 (Until 2026-11-19 the curve was harsher, `(1 - x^1.5)^5`, a median of 26%:
-migration 7 moved every condition drawn on it to this one, each keeping its
-rank, then migration 8 drew every item's condition again on this curve: a
-fresh start for every item made before.)
+migration 7 moved every condition drawn on it to `(1 - x^3)^5.2`, a median
+of 50%, each keeping its rank, then migration 8 drew every item's condition
+again on that curve: a fresh start for every item made before. The same day
+the owner found it still a bit harsh: migration 9 moved every condition to
+this curve, each keeping its rank, then migration 11 drew every item's
+condition again on it, another fresh start.)
 
 The front ends draw it: faded and yellowed colours, grime, scratches, frayed
 edges and, once badly worn, a crease (each item its own); a pristine card is
@@ -163,7 +166,9 @@ to a price.
 - **Both players must have won a counted run**, so new accounts can't pass
   items along.
 - **Trade hold:** an item that changes hands, or is found, can't change hands
-  again for 7 days (`BALATRO_ITEMS_TRADE_HOLD_DAYS`).
+  again for 7 days (`BALATRO_ITEMS_TRADE_HOLD_DAYS`), unless it was won in the
+  casino (below). Migration 10 ended every hold running on 2026-11-19, once,
+  at the owner's request.
 - An accepted offer moves every item at once, or none if one has moved since
   (`409 items_moved`). Every change of hands stays in the item's history.
 - At most 10 items on each side, and 20 open offers per player.
@@ -197,8 +202,9 @@ and condition). Your chance is the value of your items over the value of
 the pot. The values are fixed when the items are staked.
 
 **The same rules as trades.** Only players with a counted win may play, only
-items out of their trade hold may be staked, and the items you win start
-their hold (7 days): what you win can't be staked again at once. A staked item
+items out of their trade hold may be staked. The items you win start no hold
+(the owner's choice, 2026-11-19; before, a week): what you win may be staked,
+traded or sold again at once. A staked item
 stays yours but can't be traded or staked elsewhere until its game ends; if it
 is on your title screen and you lose it, the title screen gets the game's card
 back.
@@ -237,9 +243,10 @@ and staked, the biggest pots and the least likely wins.
 of its trade hold) and aim at an item worth so many times more, from x1 to
 x100: the chance is 95% over the multiplier (an item worth 100 aimed at x2:
 47.5%). Your item is gone whatever happens; a win makes you a new item worth
-the target, 5% more or less, drawn as a card is found (each card and edition
-as likely as on its kind's standard table, weighed by how likely a condition
-puts it in the range; its condition drawn there). On average you get 95% of
+the target, 5% more or less, with no trade hold, drawn as a card is found
+(each card and edition as likely as on its kind's standard table, weighed by
+how likely a condition puts it in the range; its condition drawn there). On
+average you get 95% of
 what you put in. Provably fair: `GET /v1/casino/upgrades/seed` shows the
 SHA-256 of your next upgrade's server seed before you play; the upgrade shows
 the seed, and `roll = h * 1,000,000 // 16**13` (h as above, message
@@ -339,7 +346,7 @@ Soul's `overlay` is its gem.
 |---|---|---|
 | `BALATRO_ITEMS_DATABASE_URL` | `postgresql://items:items@127.0.0.1:55435/items` (`make db`) | PostgreSQL, or `memory` |
 | `BALATRO_ITEMS_API_URL` | `http://127.0.0.1:8000` | the game API (its runs and catalog) |
-| `BALATRO_ITEMS_TRADE_HOLD_DAYS` | `7` | |
+| `BALATRO_ITEMS_TRADE_HOLD_DAYS` | `7` | not for items won in the casino |
 | `BALATRO_ITEMS_CASINO` | `on` | `off`: nothing can be staked in the casino |
 | `BALATRO_ITEMS_JACKPOT_SECONDS` | `60` | from the second player in the pot to its draw |
 | `BALATRO_ITEMS_HEARTBEAT` | `20` | seconds between a live stream's keep-alive comments |

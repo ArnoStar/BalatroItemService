@@ -467,7 +467,7 @@ def test_migration_7_moves_the_conditions_of_before_keeping_their_rank(pg) -> No
 
 
 def test_migration_8_draws_every_items_condition_again(pg) -> None:  # type: ignore[no-untyped-def]
-    """Every item gets a new condition, drawn on the kinder curve (a median of 50%)."""
+    """Every item gets a new condition, drawn on the curve of then (a = 3, b = 5.2: a median of 50%)."""
     import psycopg
     from psycopg import sql as pgsql
 
@@ -480,13 +480,13 @@ def test_migration_8_draws_every_items_condition_again(pg) -> None:  # type: ign
     store.close()
     with psycopg.connect(PG_URL, autocommit=True) as conn:  # type: ignore[arg-type]
         conn.execute(pgsql.SQL("SET search_path TO {}").format(pgsql.SQL(search_path)))
-        conn.execute("DELETE FROM schema_migrations WHERE version = 8")
         conn.execute("INSERT INTO players (id, name, has_won, showcase, created_at) VALUES ('p1', 'A', true, null, %s)",
                      (T0,))
         for n in range(1000):
             conn.execute("INSERT INTO items (id, kind, key, edition, rarity, serial, owner, source, created_at, "
                          "acquired_at, tradable_at, condition) VALUES (%s, 'joker', 'j_joker', 'base', 1, %s, 'p1', "
                          "'gift', %s, %s, %s, 0.123456)", (f"i{n}", n + 1, T0, T0, T0))
+        conn.execute(postgres.MIGRATIONS[7].encode())  # (migration 8 alone: 9 moves them all after it)
     store = postgres.PostgresStore(PG_URL, schema=search_path.strip('"'))  # type: ignore[arg-type]
     try:
         with store.unit() as u:
@@ -494,6 +494,117 @@ def test_migration_8_draws_every_items_condition_again(pg) -> None:  # type: ign
             assert len(conditions) == 1000 and 0.123456 not in conditions
             assert all(0 <= c <= 1 for c in conditions)
             assert 0.45 < conditions[500] < 0.55  # the median: 50%
+            assert len(set(conditions)) > 990  # each its own
+    finally:
+        store.close()
+
+
+def test_migration_9_moves_the_conditions_a_bit_kinder_keeping_their_rank(pg) -> None:  # type: ignore[no-untyped-def]
+    """Conditions drawn on the curve of before (a = 3, b = 5.2) move to the kinder one (a = 3.5, b = 5): the old
+    median (50%) becomes the new one (56%), and the order stays."""
+    import psycopg
+    from psycopg import sql as pgsql
+
+    from balatro_items.domain import condition_at
+    from balatro_items.infrastructure.persistence import postgres
+    from tests.conftest import PG_URL
+
+    store = pg()
+    with store._pool.connection() as conn:
+        search_path = conn.execute("SHOW search_path").fetchone()["search_path"]  # type: ignore[index]
+    store.close()
+    with psycopg.connect(PG_URL, autocommit=True) as conn:  # type: ignore[arg-type]
+        conn.execute(pgsql.SQL("SET search_path TO {}").format(pgsql.SQL(search_path)))
+        conn.execute("INSERT INTO players (id, name, has_won, showcase, created_at) VALUES ('p1', 'A', true, null, %s)",
+                     (T0,))
+        old = {"i0": 0.0, "i1": 0.1, "i2": 0.5, "i3": 0.6, "i4": 0.8, "i5": 1.0}
+        for iid, c in old.items():
+            conn.execute("INSERT INTO items (id, kind, key, edition, rarity, serial, owner, source, created_at, "
+                         "acquired_at, tradable_at, condition) VALUES (%s, 'joker', 'j_joker', 'base', 1, %s, 'p1', "
+                         "'gift', %s, %s, %s, %s)", (iid, int(iid[1:]) + 1, T0, T0, T0, c))
+        conn.execute("INSERT INTO packs (id, owner, booster, price, picks, choices, status, created_at) VALUES "
+                     "('k1', 'p1', 'joker_standard_normal', 100, 1, %s, 'open', %s)",
+                     (Jsonb([{"kind": "joker", "key": "j_joker", "rarity": 1, "edition": "base", "condition": 0.5},
+                             {"kind": "joker", "key": "j_mime", "rarity": 2, "edition": "base"}]), T0))
+        conn.execute(postgres.MIGRATIONS[8].encode())  # (migration 9 alone)
+    store = postgres.PostgresStore(PG_URL, schema=search_path.strip('"'))  # type: ignore[arg-type]
+    try:
+        with store.unit() as u:
+            new = {iid: u.item(iid).condition for iid in old}  # type: ignore[union-attr]
+            assert new["i0"] == 0.0 and new["i5"] == 1.0
+            assert abs(new["i2"] - condition_at(0.5)) < 0.001  # the old median is the new one
+            assert sorted(new, key=new.__getitem__) == list(old)  # the order stays
+            assert all(new[i] >= old[i] for i in old)  # kinder
+            pack = u.pack("k1")
+            assert pack is not None and abs(pack.choices[0].condition - condition_at(0.5)) < 0.001  # type: ignore[operator]
+            assert pack.choices[1].condition is None
+    finally:
+        store.close()
+
+
+def test_migration_10_ends_every_trade_hold_once(pg) -> None:  # type: ignore[no-untyped-def]
+    """Items in their trade hold may change hands at once; the others keep when theirs ended."""
+    from datetime import UTC, datetime
+
+    import psycopg
+    from psycopg import sql as pgsql
+
+    from balatro_items.infrastructure.persistence import postgres
+    from tests.conftest import PG_URL
+
+    store = pg()
+    with store._pool.connection() as conn:
+        search_path = conn.execute("SHOW search_path").fetchone()["search_path"]  # type: ignore[index]
+    store.close()
+    future = datetime(2100, 1, 1, tzinfo=UTC)
+    with psycopg.connect(PG_URL, autocommit=True) as conn:  # type: ignore[arg-type]
+        conn.execute(pgsql.SQL("SET search_path TO {}").format(pgsql.SQL(search_path)))
+        conn.execute("INSERT INTO players (id, name, has_won, showcase, created_at) VALUES ('p1', 'A', true, null, %s)",
+                     (T0,))
+        for n, until in enumerate((T0, future)):
+            conn.execute("INSERT INTO items (id, kind, key, edition, rarity, serial, owner, source, created_at, "
+                         "acquired_at, tradable_at, condition) VALUES (%s, 'joker', 'j_joker', 'base', 1, %s, 'p1', "
+                         "'gift', %s, %s, %s, 0.5)", (f"i{n}", n + 1, T0, T0, until))
+        conn.execute(postgres.MIGRATIONS[9].encode())  # (migration 10 alone)
+    store = postgres.PostgresStore(PG_URL, schema=search_path.strip('"'))  # type: ignore[arg-type]
+    try:
+        with store.unit() as u:
+            held, free = u.item("i1"), u.item("i0")
+            assert held is not None and free is not None
+            assert held.tradable_at <= datetime.now(UTC) and free.tradable_at == T0
+    finally:
+        store.close()
+
+
+def test_migration_11_draws_every_items_condition_again(pg) -> None:  # type: ignore[no-untyped-def]
+    """Every item gets a new condition, drawn on the curve of now (a = 3.5, b = 5: a median of 56%)."""
+    import psycopg
+    from psycopg import sql as pgsql
+
+    from balatro_items.domain import condition_at
+    from balatro_items.infrastructure.persistence import postgres
+    from tests.conftest import PG_URL
+
+    store = pg()
+    with store._pool.connection() as conn:
+        search_path = conn.execute("SHOW search_path").fetchone()["search_path"]  # type: ignore[index]
+    store.close()
+    with psycopg.connect(PG_URL, autocommit=True) as conn:  # type: ignore[arg-type]
+        conn.execute(pgsql.SQL("SET search_path TO {}").format(pgsql.SQL(search_path)))
+        conn.execute("INSERT INTO players (id, name, has_won, showcase, created_at) VALUES ('p1', 'A', true, null, %s)",
+                     (T0,))
+        for n in range(1000):
+            conn.execute("INSERT INTO items (id, kind, key, edition, rarity, serial, owner, source, created_at, "
+                         "acquired_at, tradable_at, condition) VALUES (%s, 'joker', 'j_joker', 'base', 1, %s, 'p1', "
+                         "'gift', %s, %s, %s, 0.123456)", (f"i{n}", n + 1, T0, T0, T0))
+        conn.execute(postgres.MIGRATIONS[10].encode())  # (migration 11 alone)
+    store = postgres.PostgresStore(PG_URL, schema=search_path.strip('"'))  # type: ignore[arg-type]
+    try:
+        with store.unit() as u:
+            conditions = sorted(i.condition for i in u.items_of("p1"))
+            assert len(conditions) == 1000 and 0.123456 not in conditions
+            assert all(0 <= c <= 1 for c in conditions)
+            assert abs(conditions[500] - condition_at(0.5)) < 0.05  # the median: 56%
             assert len(set(conditions)) > 990  # each its own
     finally:
         store.close()

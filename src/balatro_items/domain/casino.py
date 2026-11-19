@@ -32,7 +32,9 @@ server, could steer it (the server chose its seed before the players chose
 theirs, and they didn't know it).
 
 A staked item stays its owner's, but can't change hands (nor be staked again)
-until its game ends; then the items the winner takes start their trade hold.
+until its game ends; then the items the winner takes are theirs at once, with
+no trade hold (the owner's choice, 2026-11-19): they may be staked, traded or
+sold again right away.
 """
 
 from __future__ import annotations
@@ -257,9 +259,9 @@ def cancel(game: Game, player: str, now: datetime) -> None:
     game.updated_at = now
 
 
-def pay_out(game: Game, items: Mapping[str, Item], now: datetime, hold: timedelta) -> list[tuple[Item, str]]:
+def pay_out(game: Game, items: Mapping[str, Item], now: datetime) -> list[tuple[Item, str]]:
     """Ends a drawn or cancelled game: every item is unstaked, and the winner takes the other
-    players' (they start their trade hold). Returns each moved item with its former owner."""
+    players' (no trade hold: tradable at once). Returns each moved item with its former owner."""
     if game.status is GameStatus.OPEN:
         raise GameClosed("this game isn't over")
     moved: list[tuple[Item, str]] = []
@@ -273,7 +275,7 @@ def pay_out(game: Game, items: Mapping[str, Item], now: datetime, hold: timedelt
                 moved.append((item, item.owner))
                 item.owner = game.winner
                 item.acquired_at = now
-                item.tradable_at = now + hold
+                item.tradable_at = now
     return moved
 
 

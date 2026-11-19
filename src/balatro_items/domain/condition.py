@@ -1,19 +1,20 @@
 """An item's condition: how well kept its card is, from 0 (ruined) to 1 (pristine).
 
 Every item gets one when it is made (a booster's card when it is shown, a gift,
-an upgrade's prize), drawn from a Kumaraswamy distribution (a = 3, b = 5.2):
+an upgrade's prize), drawn from a Kumaraswamy distribution (a = 3.5, b = 5):
 
     P(condition >= x) = (1 - x**a) ** b
 
-so half the cards are above 50% (the median), 60% or more is 1 in 3.5, a
-really good one rare but within reach (80%: 1 in 41; 90%: 1 in 878), and the
-best close to impossible (95%: 1 in 24,600; 99%: about 1 in 85 million). Its
+so half the cards are above 56% (the median), 60% or more is 1 in 2.5, a
+really good one rare but within reach (80%: 1 in 21; 90%: 1 in 358), and the
+best close to impossible (95%: 1 in 8,300; 99%: about 1 in 20 million). Its
 inverse is closed-form, so it is drawn from one uniform number (the store's
-migration 5 drew the conditions of the items made before this way, migration
-7 moved them to this distribution, each keeping its rank, and migration 8
-drew every item's condition again on it).
+migration 5 drew the conditions of the items made before this way, migrations
+7 and 9 moved them to the next distribution, each keeping its rank, and
+migrations 8 and 11 drew every item's condition again).
 
-(Until 2026-11-19 it was a = 1.5, b = 5: a median of 26%, 80% 1 in 537.)
+(Until 2026-11-19 it was a = 1.5, b = 5: a median of 26%, 80% 1 in 537; then
+a = 3, b = 5.2: a median of 50%, 80% 1 in 41.)
 
 An item's value is its value in mint condition times its condition
 (value.py); the front ends draw the wear (faded colours, grime, scratches,
@@ -24,8 +25,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-CONDITION_A = 3.0
-CONDITION_B = 5.2
+CONDITION_A = 3.5
+CONDITION_B = 5.0
 DIGITS = 6  # a condition is kept to the millionth
 
 # the grades shown with a condition: the lowest condition of each

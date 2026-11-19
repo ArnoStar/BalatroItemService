@@ -54,7 +54,7 @@ def test_an_upgrade_won_and_one_lost(world: World) -> None:
         if up["won"]:
             prize = up["prize"]
             assert up["low"] <= prize["value"] == up["prize_value"] <= up["high"]
-            assert prize["owner"] == "alice" and prize["source"] == "upgrade" and not prize["tradable"]
+            assert prize["owner"] == "alice" and prize["source"] == "upgrade" and prize["tradable"]  # (no hold)
         else:
             assert up["prize"] is None
         outcomes.append(up["won"])

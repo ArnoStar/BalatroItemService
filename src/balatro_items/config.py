@@ -16,7 +16,7 @@ class Settings:
     api_url: str = "http://127.0.0.1:8000"  # the game API (BalatroWebAPI), without /api/v1
     cors_origins: tuple[str, ...] = ("*",)
     admins: tuple[str, ...] = ()  # account ids that may give items, besides the admin role
-    trade_hold_days: float = 7  # an item that changes hands (or is found) can't again for this long
+    trade_hold_days: float = 7  # an item that changes hands (or is found) can't again for this long (won: none)
     casino: bool = True  # False: nothing can be staked in the casino (staked items can still be taken back)
     jackpot_seconds: float = 60  # from the second player in the jackpot to its draw
     heartbeat: float = 20  # seconds between a live stream's keep-alive comments (proxies close idle connections)

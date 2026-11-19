@@ -191,7 +191,7 @@ class Deps:
     ids: IdGenerator
     rng: Random
     seeds: SeedSource
-    hold: timedelta  # an item's trade hold after it changes hands (or is found)
+    hold: timedelta  # an item's trade hold after it changes hands (or is found), not when won in the casino
     admins: frozenset[str] = frozenset()  # account ids that may give items, besides the admin role
     auth_required: bool = True
     casino_open: bool = True  # False: nothing can be staked
@@ -1013,7 +1013,7 @@ class Casino:
     def end(self, u: Unit, game: Game, now: datetime) -> None:
         """A drawn or cancelled game: its items are unstaked, and the winner takes the others'."""
         items = u.items(game.items, lock=True)
-        for item, before in pay_out(game, items, now, self.deps.hold):
+        for item, before in pay_out(game, items, now):
             u.add_transfer(Transfer(item=item.id, from_owner=before, to_owner=item.owner, at=now, game=game.id))
         for item in items.values():
             u.save_item(item)
@@ -1435,7 +1435,7 @@ class PlayUpgrade(Casino):
                 won = u.add_item(Item(
                     id=d.ids.new_id(), kind=t.kind, key=t.key, edition=prize.edition, rarity=t.rarity, stake=None,
                     serial=0, owner=player.id, source="upgrade", source_run=None, created_at=now, acquired_at=now,
-                    tradable_at=now + d.hold, enhancement=t.enhancement, seal=t.seal, condition=condition))
+                    tradable_at=now, enhancement=t.enhancement, seal=t.seal, condition=condition))  # (no hold)
                 u.add_transfer(Transfer(item=won.id, from_owner=None, to_owner=player.id, at=now, game=up.id))
                 up.prize, up.prize_value = won.id, item_value(won)
             u.add_upgrade(up)

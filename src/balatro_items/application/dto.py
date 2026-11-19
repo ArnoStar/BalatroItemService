@@ -381,7 +381,7 @@ class CasinoRulesView:
     jackpot_seconds: float  # from the second player in the pot to its draw
     jackpot_max_players: int
     jackpot_max_items: int
-    trade_hold_days: float  # the items won start it
+    trade_hold_days: float  # an item that changed hands outside the casino can't be staked for this long (won: none)
     dice_min_chance: int = 5  # percent: the chances a dice game's first player may choose
     dice_max_chance: int = 95
     upgrade_edge: float = 95  # percent: an upgrade's chance is this over its multiplier
