@@ -123,7 +123,8 @@ migration 7 moved every condition drawn on it to `(1 - x^3)^5.2`, a median
 of 50%, each keeping its rank, then migration 8 drew every item's condition
 again on that curve: a fresh start for every item made before. The same day
 the owner found it still a bit harsh: migration 9 moved every condition to
-this curve, each keeping its rank, so 50% became 56% and 80% became 83%.)
+this curve, each keeping its rank, then migration 11 drew every item's
+condition again on it, another fresh start.)
 
 The front ends draw it: faded and yellowed colours, grime, scratches, frayed
 edges and, once badly worn, a crease (each item its own); a pristine card is

@@ -11,7 +11,7 @@ best close to impossible (95%: 1 in 8,300; 99%: about 1 in 20 million). Its
 inverse is closed-form, so it is drawn from one uniform number (the store's
 migration 5 drew the conditions of the items made before this way, migrations
 7 and 9 moved them to the next distribution, each keeping its rank, and
-migration 8 drew every item's condition again).
+migrations 8 and 11 drew every item's condition again).
 
 (Until 2026-11-19 it was a = 1.5, b = 5: a median of 26%, 80% 1 in 537; then
 a = 3, b = 5.2: a median of 50%, 80% 1 in 41.)

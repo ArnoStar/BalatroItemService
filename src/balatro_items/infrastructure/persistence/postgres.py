@@ -305,6 +305,11 @@ MIGRATIONS: tuple[str, ...] = (
     """
     UPDATE items SET tradable_at = now() WHERE tradable_at > now();
     """,
+    # 11: every item's condition drawn again, on the distribution of migration 9 (a = 3.5, b = 5: its inverse, from
+    # one uniform number each), at the owner's request (2026-11-19): a fresh start for the items made before
+    """
+    UPDATE items SET condition = round(power(1 - power(1 - random(), 1.0 / 5), 1.0 / 3.5)::numeric, 6)::float8;
+    """,
 )
 
 ITEM_COLUMNS = ("id", "kind", "key", "edition", "rarity", "stake", "serial", "owner", "source", "source_run",
