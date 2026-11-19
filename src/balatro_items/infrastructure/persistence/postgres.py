@@ -284,6 +284,22 @@ MIGRATIONS: tuple[str, ...] = (
     """
     UPDATE items SET condition = round(power(1 - power(1 - random(), 1.0 / 5.2), 1.0 / 3)::numeric, 6)::float8;
     """,
+    # 9: conditions a bit kinder again (domain/condition.py: a = 3.5, b = 5, a median of 56%), at the owner's request
+    # (2026-11-19): every condition drawn before (a = 3, b = 5.2) moves to the new distribution keeping its rank,
+    # new = (1 - (1 - old^3)^(5.2/5))^(1/3.5); the cards of the packs not chosen from yet too (its own function:
+    # migration 7's pg_temp.kinder lives as long as the connection)
+    """
+    CREATE FUNCTION pg_temp.kinder9(c DOUBLE PRECISION) RETURNS DOUBLE PRECISION AS $$
+        SELECT round(power(1 - power(1 - power(c, 3), 5.2 / 5), 1.0 / 3.5)::numeric, 6)::float8
+    $$ LANGUAGE sql IMMUTABLE;
+    UPDATE items SET condition = pg_temp.kinder9(condition);
+    UPDATE packs SET choices = (
+        SELECT jsonb_agg(CASE WHEN jsonb_typeof(c -> 'condition') = 'number'
+                              THEN jsonb_set(c, '{condition}', to_jsonb(pg_temp.kinder9((c ->> 'condition')::float8)))
+                              ELSE c END ORDER BY n)
+        FROM jsonb_array_elements(choices) WITH ORDINALITY AS t (c, n))
+    WHERE status = 'open' AND jsonb_array_length(choices) > 0;
+    """,
 )
 
 ITEM_COLUMNS = ("id", "kind", "key", "edition", "rarity", "stake", "serial", "owner", "source", "source_run",

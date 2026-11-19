@@ -104,24 +104,26 @@ game called off and its pending offers cancelled (migration 4).
 
 Every item has a condition from 0 (ruined) to 1 (pristine), drawn when its
 card is shown (a booster's card is shown with it, before the player
-chooses): `P(condition >= x) = (1 - x^3)^5.2`. Half the cards are above 50%;
+chooses): `P(condition >= x) = (1 - x^3.5)^5`. Half the cards are above 56%;
 a really good one is rare but within reach, the best close to impossible:
 
 | condition | grade | one card in |
 |---|---|---|
-| 0-10% | ruined | (0.5% of the cards) |
+| 0-10% | ruined | (0.16% of the cards) |
 | 10-25% | battered | |
 | 25-45% | worn | |
-| 45-60% | played | 1.6 (45% or more) |
-| 60-80% | fine | 3.5 |
-| 80-95% | excellent | 41 |
-| 95-99% | mint | 24,600 |
-| 99-100% | pristine | 85 million |
+| 45-60% | played | 1.4 (45% or more) |
+| 60-80% | fine | 2.5 |
+| 80-95% | excellent | 21 |
+| 95-99% | mint | 8,300 |
+| 99-100% | pristine | 20 million |
 
 (Until 2026-11-19 the curve was harsher, `(1 - x^1.5)^5`, a median of 26%:
-migration 7 moved every condition drawn on it to this one, each keeping its
-rank, then migration 8 drew every item's condition again on this curve: a
-fresh start for every item made before.)
+migration 7 moved every condition drawn on it to `(1 - x^3)^5.2`, a median
+of 50%, each keeping its rank, then migration 8 drew every item's condition
+again on that curve: a fresh start for every item made before. The same day
+the owner found it still a bit harsh: migration 9 moved every condition to
+this curve, each keeping its rank, so 50% became 56% and 80% became 83%.)
 
 The front ends draw it: faded and yellowed colours, grime, scratches, frayed
 edges and, once badly worn, a crease (each item its own); a pristine card is
