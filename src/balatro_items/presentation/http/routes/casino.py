@@ -60,7 +60,7 @@ def create_coinflip(body: CoinflipRequest, player: CurrentPlayer, uses: Uses) ->
 @router.post("/coinflips/{game_id}/join", response_model=GameView, summary="Match a coinflip: flip the coin")
 def join_coinflip(game_id: str, body: BetRequest, player: CurrentPlayer, uses: Uses) -> GameView:
     """Your items must be worth ``join_min`` to ``join_max`` together. The coin is flipped at once: the
-    winner takes every item (``winner``), which starts its trade hold."""
+    winner takes every item (``winner``), with no trade hold: it may be staked again at once."""
     return uses.join_coinflip(player, game_id, body.to_dto())
 
 

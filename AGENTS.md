@@ -46,13 +46,15 @@ screen, the profile), it never plays it.
 7. **The casino and the market only move items (and coins) between players**
    (`domain/casino.py`, `domain/market.py`). They make no item or coin and keep
    none (no house, no cut); they play by the trade rules (a first win, the
-   trade hold); staked or listed items can't change hands any other way until
-   their game ends or they are sold or taken off, and items won or bought are
-   `Transfer`s with the game or the listing. **One exception, the owner's
-   (2026-11-19): the upgrade** (`domain/upgrade.py`) is played against the
-   house: the item put in is destroyed (kept, with `destroyed_at`), a win makes
-   one worth the multiplier, and the chance is 95% over it (the house keeps
-   5%, so items only get scarcer). It plays by the trade rules too, and it is
+   trade hold), except that items won in the casino start no hold (the
+   owner's choice, 2026-11-19); staked or listed items can't change hands any
+   other way until their game ends or they are sold or taken off, and items
+   won or bought are `Transfer`s with the game or the listing. **One
+   exception, the owner's (2026-11-19): the upgrade** (`domain/upgrade.py`)
+   is played against the house: the item put in is destroyed (kept, with
+   `destroyed_at`), a win makes one worth the multiplier, and the chance is
+   95% over it (the house keeps 5%, so items only get scarcer). It plays by
+   the trade rules too (its prize starts no hold either), and it is
    provably fair the same way (the player's next server seed is committed to).
    Don't add another game against the house without the owner asking. Draws are
    provably fair: never show a server seed before its game is over, and never

@@ -540,3 +540,37 @@ def test_migration_9_moves_the_conditions_a_bit_kinder_keeping_their_rank(pg) ->
             assert pack.choices[1].condition is None
     finally:
         store.close()
+
+
+def test_migration_10_ends_every_trade_hold_once(pg) -> None:  # type: ignore[no-untyped-def]
+    """Items in their trade hold may change hands at once; the others keep when theirs ended."""
+    from datetime import UTC, datetime
+
+    import psycopg
+    from psycopg import sql as pgsql
+
+    from balatro_items.infrastructure.persistence import postgres
+    from tests.conftest import PG_URL
+
+    store = pg()
+    with store._pool.connection() as conn:
+        search_path = conn.execute("SHOW search_path").fetchone()["search_path"]  # type: ignore[index]
+    store.close()
+    future = datetime(2100, 1, 1, tzinfo=UTC)
+    with psycopg.connect(PG_URL, autocommit=True) as conn:  # type: ignore[arg-type]
+        conn.execute(pgsql.SQL("SET search_path TO {}").format(pgsql.SQL(search_path)))
+        conn.execute("INSERT INTO players (id, name, has_won, showcase, created_at) VALUES ('p1', 'A', true, null, %s)",
+                     (T0,))
+        for n, until in enumerate((T0, future)):
+            conn.execute("INSERT INTO items (id, kind, key, edition, rarity, serial, owner, source, created_at, "
+                         "acquired_at, tradable_at, condition) VALUES (%s, 'joker', 'j_joker', 'base', 1, %s, 'p1', "
+                         "'gift', %s, %s, %s, 0.5)", (f"i{n}", n + 1, T0, T0, until))
+        conn.execute(postgres.MIGRATIONS[9].encode())  # (migration 10 alone)
+    store = postgres.PostgresStore(PG_URL, schema=search_path.strip('"'))  # type: ignore[arg-type]
+    try:
+        with store.unit() as u:
+            held, free = u.item("i1"), u.item("i0")
+            assert held is not None and free is not None
+            assert held.tradable_at <= datetime.now(UTC) and free.tradable_at == T0
+    finally:
+        store.close()

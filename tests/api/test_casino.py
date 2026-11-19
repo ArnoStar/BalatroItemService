@@ -102,8 +102,10 @@ def test_a_coinflip(world: World) -> None:
     mine = a if winner == "alice" else b
     assert item(world, mine)["item"]["owner"] == winner and item(world, mine)["item"]["tradable"]
     won = item(world, theirs)
-    assert won["item"]["owner"] == winner and won["item"]["staked"] is None and not won["item"]["tradable"]
+    assert won["item"]["owner"] == winner and won["item"]["staked"] is None
     assert won["history"][-1]["game"] == done["id"] and won["history"][-1]["to_player"] == winner
+    # what is won has no trade hold: it may be staked again at once
+    assert won["item"]["tradable"] and won["item"]["tradable_at"] == done["updated_at"]
     assert c.get("/v1/me", headers=PLAYERS[loser]).json()["showcase"] is None
     assert c.get("/v1/me", headers=PLAYERS[winner]).json()["showcase"]["id"] == mine
     assert c.get("/v1/casino/coinflips", headers=BOB).json() == []
@@ -111,6 +113,8 @@ def test_a_coinflip(world: World) -> None:
     assert c.get("/v1/casino/games?player=carol", headers=CAROL).json() == []
     r = c.post(f"/v1/casino/coinflips/{g['id']}/join", headers=CAROL, json={"items": [rich]})
     assert r.status_code == 409 and r.json()["code"] == "game_closed"
+    r = c.post("/v1/casino/jackpot", headers=PLAYERS[winner], json={"items": [theirs]})
+    assert r.status_code == 200, r.text
 
 
 def test_a_coinflip_nobody_joins_is_taken_back(world: World) -> None:
@@ -293,7 +297,7 @@ def test_stats_and_the_leaderboard(world: World) -> None:
         g = c.post("/v1/casino/coinflips", headers=ALICE, json={"items": [mine]}).json()
         world.clock.advance(seconds=1)
         played.append(c.post(f"/v1/casino/coinflips/{g['id']}/join", headers=BOB, json={"items": [theirs]}).json())
-        out_of_hold(world)  # (what was won may be staked again)
+        world.clock.advance(days=8)  # (the leaderboard's week, below)
     value = played[0]["entries"][0]["value"]
     wins = sum(g["winner"] == "alice" for g in played)
     stats = c.get("/v1/casino/players/alice/stats", headers=CAROL).json()
@@ -312,7 +316,7 @@ def test_stats_and_the_leaderboard(world: World) -> None:
     assert [r["net"] for r in board["winners"]] == sorted((r["net"] for r in board["winners"]), reverse=True)
     assert all(r["net"] > 0 for r in board["winners"])
     assert {r["player"] for r in board["stakers"]} == {"alice", "bob"}
-    # the week: the games were played more than a week ago (out_of_hold moved the clock on)
+    # the week: the games were played more than a week ago (the clock moved on)
     assert c.get("/v1/casino/leaderboard", headers=CAROL).json()["games"] == 0
     r = c.get("/v1/casino/leaderboard?period=year", headers=CAROL)
     assert r.status_code == 422

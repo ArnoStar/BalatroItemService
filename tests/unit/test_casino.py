@@ -46,7 +46,6 @@ from balatro_items.domain import (
 from balatro_items.domain.casino import roll, winner_of
 from tests.fakes import T0
 
-HOLD = timedelta(days=7)
 WAIT = timedelta(seconds=60)
 
 
@@ -156,10 +155,10 @@ def test_the_winner_takes_the_others_items() -> None:
     owners = {"a": "alice", "b": "bob"}
     items = {i: item(i, owners[i[0]], staked="g1") for i in ("a1", "a2", "b1", "b2")}
     later = T0 + timedelta(hours=1)
-    moved = pay_out(g, items, later, HOLD)
+    moved = pay_out(g, items, later)
     assert sorted((i.id, before) for i, before in moved) == [("a1", "alice"), ("a2", "alice")]
     assert all(i.owner == "bob" and i.staked is None for i in items.values())
-    assert items["a1"].tradable_at == later + HOLD and items["b1"].tradable_at == T0  # (bob's own didn't move)
+    assert items["a1"].tradable_at == later and items["b1"].tradable_at == T0  # (no hold; bob's own didn't move)
 
 
 def test_a_cancelled_game_gives_everything_back() -> None:
@@ -168,9 +167,9 @@ def test_a_cancelled_game_gives_everything_back() -> None:
         cancel(g, "bob", T0)
     items = {"a1": item("a1", "alice", staked="g1")}
     with pytest.raises(GameClosed):
-        pay_out(g, items, T0, HOLD)  # (not over)
+        pay_out(g, items, T0)  # (not over)
     cancel(g, "alice", T0)
-    assert pay_out(g, items, T0, HOLD) == [] and items["a1"].staked is None and items["a1"].owner == "alice"
+    assert pay_out(g, items, T0) == [] and items["a1"].staked is None and items["a1"].owner == "alice"
     with pytest.raises(GameClosed):
         cancel(g, "alice", T0)
     g = game(Mode.JACKPOT, entry("alice", 10), entry("bob", 10))

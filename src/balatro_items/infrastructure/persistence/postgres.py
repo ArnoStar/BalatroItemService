@@ -300,6 +300,11 @@ MIGRATIONS: tuple[str, ...] = (
         FROM jsonb_array_elements(choices) WITH ORDINALITY AS t (c, n))
     WHERE status = 'open' AND jsonb_array_length(choices) > 0;
     """,
+    # 10: every trade hold running ends now, once, at the owner's request (2026-11-19, when items won in the casino
+    # stopped starting one): every item may change hands again at once
+    """
+    UPDATE items SET tradable_at = now() WHERE tradable_at > now();
+    """,
 )
 
 ITEM_COLUMNS = ("id", "kind", "key", "edition", "rarity", "stake", "serial", "owner", "source", "source_run",
